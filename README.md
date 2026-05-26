@@ -128,8 +128,9 @@ pnpm start
 | 命令 | 说明 |
 |------|------|
 | `/help` | 显示完整命令列表 |
-| `/model [id]` | 显示或切换模型 |
-| `/connect [provider] [key]` | 配置 Provider 连接 |
+| `/model [id]` | Show cached models, fuzzy search, or switch |
+| `/model refresh` | Re-fetch model list from provider API |
+| `/connect [provider] [key]` | Configure provider + cache models |
 | `/sessions [id]` | 列出或加载历史会话 |
 | `/new` | 新建会话 |
 | `/compact` | 压缩历史（摘要替换） |
