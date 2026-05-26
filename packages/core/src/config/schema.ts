@@ -33,6 +33,15 @@ export interface NekoUserConfig {
    */
   model?: string
 
+  /**
+   * Cached model lists per provider. Populated on first /connect.
+   * Key is provider name, value is array of model IDs.
+   *
+   * Example:
+   *   { "anthropic": ["claude-sonnet-4-6", "claude-opus-4-7", ...] }
+   */
+  models?: Record<string, string[]>
+
   /** HTTP proxy URL applied to all outbound requests, e.g. "http://127.0.0.1:7890" */
   proxy?: string
 
@@ -61,6 +70,7 @@ export type ResolvedConfig = Required<Omit<NekoUserConfig, 'proxy' | 'providers'
 export const defaultConfig: ResolvedConfig = {
   providers: {},
   model: 'anthropic/claude-sonnet-4-6',
+  models: {},
   mcpServers: {},
   session: {
     maxMessages: 200,

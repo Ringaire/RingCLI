@@ -41,6 +41,36 @@ import { renderStatus } from '../commands/status.js'
 import { pluginInstall, pluginList, pluginRemove } from '../commands/plugin.js'
 import { runRc, formatRcOutput } from './rc.js'
 
+// ── Model fetching ───────────────────────────────────────────────────────────
+
+/**
+ * Fetch available model IDs from a provider's /models endpoint.
+ * Tries OpenAI-compatible format first, then raw array.
+ */
+async function fetchProviderModels(
+  baseUrl: string | undefined,
+  apiKey: string | undefined,
+): Promise<string[] | null> {
+  if (!baseUrl) return null
+  try {
+    const url = baseUrl.replace(/\/+$/, '') + '/models'
+    const headers: Record<string, string> = {}
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) })
+    if (!res.ok) return null
+    const data = await res.json() as
+      | { data: Array<{ id: string }> }
+      | Array<{ id: string }>
+    const items = Array.isArray(data) ? data : (data.data ?? [])
+    const ids = items
+      .map(m => m.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    return ids.length > 0 ? ids : null
+  } catch {
+    return null
+  }
+}
+
 export interface ReplCommandContext {
   runtime: NekoRuntime
   session: Session
@@ -152,7 +182,8 @@ const HELP = `
 │   /exit                  Exit NekoCode                      │
 │                                                              │
 │ Agent                                                        │
-│   /model [id]            Show or switch model               │
+│   /model [id]            Show cached models, fuzzy search, or switch  │
+│   /model refresh         Re-fetch model list from provider API        │
 │   /connect [prov] [key]  Configure provider connection      │
 │   /mcp <name> <cmd>      Add MCP server for this session    │
 │   /think [on|off] [N]    Extended thinking (N=token budget) │
@@ -280,17 +311,101 @@ export async function handleReplCommand(
     // ── Agent / Model ─────────────────────────────────────────────────────────
     case 'model': {
       const target = args.trim()
-      if (!target) {
-        const lines = [`Current model: ${ctx.model}`, '', 'Available providers (use provider/model-id format):']
-        for (const [key, p] of Object.entries(PRESETS)) {
-          const env = p.apiKeyEnv ? `  (${p.apiKeyEnv})` : ''
-          lines.push(`  ${key.padEnd(14)} ${p.name}${env}`)
+
+      // /model refresh → re-fetch models for current provider
+      if (target === 'refresh') {
+        const { loadConfig, saveConfig } = await import('@nekocode/core')
+        const cfg = await loadConfig()
+        const currentProvider = (cfg.model ?? '').split('/')[0] ?? 'anthropic'
+        const preset = PRESETS[currentProvider]
+        const entry = cfg.providers?.[currentProvider]
+        const resolvedApiKey = entry?.apiKey ?? (preset?.apiKeyEnv ? process.env[preset.apiKeyEnv] : undefined)
+        const resolvedBaseUrl = entry?.baseUrl ?? preset?.baseUrl
+
+        try {
+          const models = await fetchProviderModels(resolvedBaseUrl, resolvedApiKey)
+          if (models && models.length > 0) {
+            cfg.models ??= {}
+            cfg.models[currentProvider] = models
+            await saveConfig(cfg)
+            return { handled: true, output: `Refreshed ${models.length} models for ${currentProvider}` }
+          }
+          return { handled: true, output: `No models returned from ${currentProvider} API` }
+        } catch {
+          return { handled: true, output: `Failed to fetch models from ${currentProvider}` }
         }
-        lines.push('', 'Examples:', '  /model anthropic/claude-opus-4-7', '  /model deepseek/deepseek-chat', '  /model ollama/qwen2.5')
-        return { handled: true, output: lines.join('\n') }
       }
-      ctx.setModel(target)
-      return { handled: true, output: `Model switched to: ${target}` }
+
+      // /model <provider/model-id> → switch model directly
+      if (target && target.includes('/')) {
+        ctx.setModel(target)
+        return { handled: true, output: `Model switched to: ${target}` }
+      }
+
+      // /model <name> → fuzzy search across cached models
+      if (target) {
+        const { loadConfig } = await import('@nekocode/core')
+        const cfg = await loadConfig()
+        const currentProvider = (cfg.model ?? '').split('/')[0] ?? 'anthropic'
+        const cached = cfg.models?.[currentProvider] ?? []
+
+        if (cached.length > 0) {
+          const q = target.toLowerCase()
+          const matches = cached.filter(m => m.toLowerCase().includes(q))
+          if (matches.length === 1) {
+            const full = `${currentProvider}/${matches[0]}`
+            ctx.setModel(full)
+            return { handled: true, output: `Model switched to: ${full}` }
+          }
+          if (matches.length > 1) {
+            const lines = [`Matches for "${target}" in ${currentProvider}:`, '']
+            for (const m of matches.slice(0, 20)) {
+              lines.push(`  ${currentProvider}/${m}`)
+            }
+            if (matches.length > 20) lines.push(`  ... and ${matches.length - 20} more`)
+            lines.push('', 'Use /model provider/model-id to switch')
+            return { handled: true, output: lines.join('\n') }
+          }
+        }
+
+        // Fallback: treat as direct model id
+        ctx.setModel(target.includes('/') ? target : `${currentProvider}/${target}`)
+        return { handled: true, output: `Model switched to: ${target}` }
+      }
+
+      // /model (no args) → show current model + cached models for current provider
+      const { loadConfig } = await import('@nekocode/core')
+      const cfg = await loadConfig()
+      const currentProvider = (cfg.model ?? '').split('/')[0] ?? 'anthropic'
+      const cached = cfg.models?.[currentProvider] ?? []
+
+      const lines = [`Current model: ${ctx.model}`, '']
+
+      if (cached.length > 0) {
+        lines.push(`Cached models for ${currentProvider} (${cached.length}):`)
+        for (const m of cached.slice(0, 30)) {
+          const marker = ctx.model === `${currentProvider}/${m}` ? ' ◀' : ''
+          lines.push(`  ${currentProvider}/${m}${marker}`)
+        }
+        if (cached.length > 30) lines.push(`  ... and ${cached.length - 30} more`)
+        lines.push('', 'Use /model <name> to search, /model refresh to update list')
+      } else {
+        lines.push('No cached models. Configure a provider first:')
+        lines.push('  /connect <provider> <apiKey>')
+        lines.push('', 'Or switch directly:')
+        lines.push('  /model anthropic/claude-opus-4-7')
+        lines.push('  /model deepseek/deepseek-chat')
+      }
+
+      lines.push('', 'Configured providers:')
+      for (const [key, p] of Object.entries(PRESETS)) {
+        const hasKey = cfg.providers?.[key]?.apiKey || (p.apiKeyEnv && process.env[p.apiKeyEnv])
+        const marker = hasKey ? '✓' : ' '
+        const env = p.apiKeyEnv ? `  (${p.apiKeyEnv})` : ''
+        lines.push(`  [${marker}] ${key.padEnd(14)} ${p.name}${env}`)
+      }
+
+      return { handled: true, output: lines.join('\n') }
     }
 
     case 'connect': {
@@ -326,11 +441,31 @@ export async function handleReplCommand(
       if (cfg.model?.split('/')[0] !== providerName) {
         cfg.model = `${providerName}/${DEFAULT_MODELS[providerName] ?? 'default'}`
       }
+
+      // Fetch and cache model list from provider API
+      let modelCount = 0
+      try {
+        const resolvedApiKey = apiKey ?? (preset.apiKeyEnv ? process.env[preset.apiKeyEnv] : undefined)
+        const resolvedBaseUrl = baseUrl ?? preset.baseUrl
+        const models = await fetchProviderModels(resolvedBaseUrl, resolvedApiKey)
+        if (models && models.length > 0) {
+          cfg.models ??= {}
+          cfg.models[providerName] = models
+          modelCount = models.length
+        }
+      } catch {
+        // Model fetch failed — not critical, continue without caching
+      }
+
       await saveConfig(cfg)
+
+      const modelMsg = modelCount > 0
+        ? `\n  Cached ${modelCount} models — use /model to browse`
+        : ''
 
       return {
         handled: true,
-        output: `${preset.name} configured — switching to ${cfg.model ?? providerName}`,
+        output: `${preset.name} configured — switching to ${cfg.model ?? providerName}${modelMsg}`,
         reloadProvider: cfg.model ?? `${providerName}/${DEFAULT_MODELS[providerName] ?? 'default'}`,
       }
     }
