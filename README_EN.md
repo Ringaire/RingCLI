@@ -129,7 +129,8 @@ Type `/` in the TUI to see all commands:
 |---------|-------------|
 | `/help` | Show full command list |
 | `/model [id]` | Show cached models, fuzzy search, or switch |
-| `/model reload` | Re-fetch model list from provider API |
+| `/model refresh` | Re-fetch model list from provider API |
+| `/model reload` | Reload model config + refresh cache |
 | `/connect [provider] [key]` | Configure provider + cache models |
 | `/sessions [id]` | List or load session history |
 | `/new` | New session |

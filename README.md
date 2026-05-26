@@ -129,7 +129,8 @@ pnpm start
 |------|------|
 | `/help` | 显示完整命令列表 |
 | `/model [id]` | Show cached models, fuzzy search, or switch |
-| `/model reload` | Re-fetch model list from provider API |
+| `/model refresh` | Re-fetch model list from provider API |
+| `/model reload` | Reload model config + refresh cache |
 | `/connect [provider] [key]` | Configure provider + cache models |
 | `/sessions [id]` | 列出或加载历史会话 |
 | `/new` | 新建会话 |

@@ -183,7 +183,8 @@ const HELP = `
 │                                                              │
 │ Agent                                                        │
 │   /model [id]            Show cached models, fuzzy search, or switch  │
-│   /model refresh|reload   Re-fetch model list from provider API        │
+│   /model refresh         Re-fetch model list from provider API        │
+│   /model reload          Reload model config + refresh cache          │
 │   /connect [prov] [key]  Configure provider connection      │
 │   /mcp <name> <cmd>      Add MCP server for this session    │
 │   /think [on|off] [N]    Extended thinking (N=token budget) │
@@ -312,8 +313,41 @@ export async function handleReplCommand(
     case 'model': {
       const target = args.trim()
 
-      // /model refresh | reload → re-fetch models for current provider
-      if (target === 'refresh' || target === 'reload') {
+      // /model reload → reload model config (re-read settings, re-instantiate provider, refresh cache)
+      if (target === 'reload') {
+        const { loadConfig } = await import('@nekocode/core')
+        const cfg = await loadConfig()
+        const currentProvider = (cfg.model ?? '').split('/')[0] ?? 'anthropic'
+        const preset = PRESETS[currentProvider]
+        const entry = cfg.providers?.[currentProvider]
+        const resolvedApiKey = entry?.apiKey ?? (preset?.apiKeyEnv ? process.env[preset.apiKeyEnv] : undefined)
+        const resolvedBaseUrl = entry?.baseUrl ?? preset?.baseUrl
+
+        const lines = ['Model config reloaded.']
+
+        // Re-instantiate provider
+        ctx.setModel(cfg.model ?? 'anthropic/claude-sonnet-4-6')
+        lines.push(`  Model: ${cfg.model}`)
+
+        // Refresh model cache
+        try {
+          const models = await fetchProviderModels(resolvedBaseUrl, resolvedApiKey)
+          if (models && models.length > 0) {
+            cfg.models ??= {}
+            cfg.models[currentProvider] = models
+            const { saveConfig } = await import('@nekocode/core')
+            await saveConfig(cfg)
+            lines.push(`  Cached: ${models.length} models for ${currentProvider}`)
+          }
+        } catch {
+          lines.push(`  Model cache: fetch failed (using existing cache)`)
+        }
+
+        return { handled: true, output: lines.join('\n') }
+      }
+
+      // /model refresh → re-fetch model list only (no provider reload)
+      if (target === 'refresh') {
         const { loadConfig, saveConfig } = await import('@nekocode/core')
         const cfg = await loadConfig()
         const currentProvider = (cfg.model ?? '').split('/')[0] ?? 'anthropic'
