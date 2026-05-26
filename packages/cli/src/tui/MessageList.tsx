@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Box, Text, useInput } from 'ink'
 import { renderMarkdown } from './markdown.js'
+import { extractToolPreview } from '../agent/tool-preview.js'
 
 export type MessageRole = 'user' | 'assistant' | 'tool' | 'error' | 'system' | 'reasoning'
 
@@ -62,20 +63,6 @@ function AssistantMsg({ text }: { text: string }) {
   )
 }
 
-function toolPreview(toolName: string, input: unknown): string {
-  if (!input || typeof input !== 'object') return ''
-  const i = input as Record<string, unknown>
-  if (toolName === 'bash' && typeof i['command'] === 'string')
-    return i['command'].split('\n')[0]?.slice(0, 80) ?? ''
-  if ((toolName === 'write_file' || toolName === 'edit_file' || toolName === 'read_file') && typeof i['path'] === 'string')
-    return i['path']
-  if (toolName === 'glob' && typeof i['pattern'] === 'string') return i['pattern']
-  if (toolName === 'grep' && typeof i['pattern'] === 'string') return i['pattern']
-  if (toolName === 'web_fetch' && typeof i['url'] === 'string') return i['url'].slice(0, 80)
-  if (toolName === 'web_search' && typeof i['query'] === 'string') return i['query'].slice(0, 80)
-  return ''
-}
-
 function ToolMsg({ toolName, toolInput, ok, durationMs }: {
   toolName: string
   toolInput?: unknown
@@ -85,7 +72,7 @@ function ToolMsg({ toolName, toolInput, ok, durationMs }: {
   const status = ok === undefined ? '…' : ok ? 'ok' : 'err'
   const statusColor = ok === undefined ? undefined : ok ? 'green' : 'red'
   const dur = durationMs !== undefined ? ` ${durationMs}ms` : ''
-  const preview = toolInput !== undefined ? toolPreview(toolName, toolInput) : ''
+  const preview = toolInput !== undefined ? extractToolPreview(toolName, toolInput).summary : ''
   return (
     <Box paddingLeft={2} marginBottom={0} flexDirection="column">
       <Box>

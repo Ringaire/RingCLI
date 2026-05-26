@@ -2,7 +2,7 @@ export interface ToolPreview {
   /** Single-line summary shown in tool message and permission prompt header */
   summary: string
   /** Extra lines shown in permission prompt (e.g. diff, content preview) */
-  detail?: string
+  detail?: string | undefined
 }
 
 export function extractToolPreview(toolName: string, input: unknown): ToolPreview {

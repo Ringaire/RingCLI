@@ -1,5 +1,5 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react'
-import { Box, Text, useApp, useInput, useStdout } from 'ink'
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { Box, useApp, useStdout } from 'ink'
 import { randomUUID } from 'node:crypto'
 import type { NekoRuntime, Session } from '@nekocode/core'
 import { appendMessage, makeMessage, replaceMessages } from '@nekocode/core'
@@ -10,7 +10,10 @@ import { StatusBar } from './StatusBar.js'
 import { MessageList, type DisplayMessage } from './MessageList.js'
 import { PromptInput } from './PromptInput.js'
 import { WelcomeBanner } from './WelcomeBanner.js'
+import { PermissionPrompt } from './PermissionPrompt.js'
 import { ProviderSetup } from './ProviderSetup.js'
+import { ModelPicker } from './ModelPicker.js'
+import { SessionPicker } from './SessionPicker.js'
 import { parseInput } from '../input/parser.js'
 import { expandMentions, buildMessageWithMentions } from '../input/mentions.js'
 import { handleReplCommand } from '../repl/commands.js'
@@ -92,7 +95,9 @@ export function App({ runtime, session, permissions, model, provider, systemProm
   const [mode, setMode]                   = useState<ModeName>(permissions.mode)
   const [busy, setBusy]                   = useState(false)
   const [currentModel, setCurrentModel]   = useState(model)
-  const [showSetup, setShowSetup]         = useState(false)
+  const [showSetup, setShowSetup]           = useState(false)
+  const [showModelPicker, setShowModelPicker] = useState(false)
+  const [showSessionPicker, setShowSessionPicker] = useState(false)
   const [orchestratorMode, setOrchestrator] = useState(false)
   const [modelCatalog, setModelCatalog]   = useState<ModelCatalogEntry[]>([])
   const [thinkingEnabled, setThinking]   = useState(false)
@@ -108,10 +113,11 @@ export function App({ runtime, session, permissions, model, provider, systemProm
   const historyIdxRef = useRef(-1)   // -1 = not navigating
   const draftRef = useRef('')        // saved draft while navigating
 
-  // Token estimation from session
-  const tokens = session.messages.reduce((sum, m) =>
-    sum + m.content.reduce((s, b) =>
-      s + Math.ceil((b.text ?? JSON.stringify(b.toolInput ?? b.toolResult ?? '')).length / 3.5), 0), 0)
+  // Token estimation from display messages (updates with React state, avoids JSON.stringify on raw tool results)
+  const tokens = useMemo(() =>
+    messages.reduce((sum, m) => sum + Math.ceil(m.text.length / 3.5), 0),
+    [messages]
+  )
 
   // Subscribe to event bus
   useEffect(() => {
@@ -153,6 +159,38 @@ export function App({ runtime, session, permissions, model, provider, systemProm
     ]
     return () => { for (const u of unsubs) u() }
   }, [runtime.bus])
+
+  // ── Model switching (shared between command ctx and ModelPicker) ──────────────
+  const switchModel = useCallback((m: string) => {
+    const slash = m.indexOf('/')
+    const modelId = slash === -1 ? m : m.slice(slash + 1)
+    sessionRef.current.meta.model = modelId
+    setCurrentModel(m)
+    const newCfg = { ...configRef.current, model: m }
+    providerRegistry.fromConfig(newCfg).then(resolved => {
+      providerRef.current = resolved.provider
+    }).catch(() => { /* keep existing provider */ })
+  }, [providerRegistry])
+
+  // ── Session loading (shared between command ctx and SessionPicker) ────────────
+  const loadAndReplaceSession = useCallback((sess: typeof session) => {
+    sessionRef.current = sess
+    setMessages(sessionToDisplayMessages(sess.messages))
+    setStreaming('')
+    setReasoning('')
+    setBusy(false)
+    abortRef.current?.abort()
+    abortRef.current = null
+    // Sync model display from loaded session (#17)
+    // meta.model is just the model ID; preserve current provider prefix if present
+    if (sess.meta.model) {
+      setCurrentModel(prev => {
+        const slash = prev.indexOf('/')
+        const prov  = slash === -1 ? '' : prev.slice(0, slash + 1)
+        return prov + sess.meta.model!
+      })
+    }
+  }, [])
 
   const onCtrlC = useCallback(() => {
     if (abortRef.current) {
@@ -330,39 +368,28 @@ export function App({ runtime, session, permissions, model, provider, systemProm
         runtime,
         session: sessionRef.current,
         model: currentModel,
-        setModel: (m: string) => {
-          // Parse "provider/model-id"
-          const slash = m.indexOf('/')
-          const modelId = slash === -1 ? m : m.slice(slash + 1)
-
-          // Always update session.meta.model so the next API call uses it
-          sessionRef.current.meta.model = modelId
-          setCurrentModel(m)
-
-          // Resolve new provider asynchronously
-          const newCfg = { ...configRef.current, model: m }
-          providerRegistry.fromConfig(newCfg).then(resolved => {
-            providerRef.current = resolved.provider
-          }).catch(() => {
-            // fallback: keep existing provider, only model ID changed
-          })
-        },
+        setModel: switchModel,
         permissions,
         print: (text: string) => setMessages(prev => [...prev, { id: randomUUID(), role: 'system', text }]),
         clearSession: () => {
           sessionRef.current.messages.splice(0)
           setMessages([])
         },
-        replaceSession: (s: typeof session) => {
-          sessionRef.current = s
-          setMessages(sessionToDisplayMessages(s.messages))
-        },
+        replaceSession: loadAndReplaceSession,
         exit: () => { void runtime.dispose().then(() => exit()) },
       }
 
       const result = await handleReplCommand(parsed.name, parsed.args, ctx)
       if (result.openModal === 'provider-setup') {
         setShowSetup(true)
+        return
+      }
+      if (result.openModal === 'model-picker') {
+        setShowModelPicker(true)
+        return
+      }
+      if (result.openModal === 'session-picker') {
+        setShowSessionPicker(true)
         return
       }
       if (result.setThinking !== undefined) {
@@ -425,17 +452,26 @@ export function App({ runtime, session, permissions, model, provider, systemProm
     setMode(next)
   }, [mode, permissions])
 
-  // Permission confirmation — capture y/n when a tool is waiting for approval
-  useInput((input, key) => {
+  const handlePermAllow = useCallback(() => {
     if (!pendingPerm) return
-    if (input === 'y' || input === 'Y') {
-      setPendingPerm(null)
-      pendingPerm.resolve(true)
-    } else if (input === 'n' || input === 'N' || key.escape) {
-      setPendingPerm(null)
-      pendingPerm.resolve(false)
-    }
-  }, { isActive: pendingPerm !== null })
+    const resolve = pendingPerm.resolve
+    setPendingPerm(null)
+    resolve(true)
+  }, [pendingPerm])
+
+  const handlePermAllowAlways = useCallback(() => {
+    if (!pendingPerm) return
+    const resolve = pendingPerm.resolve
+    setPendingPerm(null)
+    resolve(true)
+  }, [pendingPerm])
+
+  const handlePermDeny = useCallback(() => {
+    if (!pendingPerm) return
+    const resolve = pendingPerm.resolve
+    setPendingPerm(null)
+    resolve(false)
+  }, [pendingPerm])
 
   // Sync mode back if changed externally (e.g. /allow /deny)
   useEffect(() => { setMode(permissions.mode) }, [permissions.mode])
@@ -445,7 +481,7 @@ export function App({ runtime, session, permissions, model, provider, systemProm
 
   return (
     <Box flexDirection="column" width={termWidth}>
-      {/* Provider setup overlay — takes over the screen */}
+      {/* Provider setup overlay */}
       {showSetup && (
         <ProviderSetup
           onDone={(configured) => {
@@ -460,8 +496,32 @@ export function App({ runtime, session, permissions, model, provider, systemProm
         />
       )}
 
-      {/* Normal UI — hidden while setup is open */}
-      {!showSetup && (
+      {/* Model picker overlay */}
+      {showModelPicker && (
+        <ModelPicker
+          currentModel={currentModel}
+          onSelect={(m) => {
+            setShowModelPicker(false)
+            switchModel(m)
+            setMessages(prev => [...prev, { id: randomUUID(), role: 'system', text: `Model: ${m}` }])
+          }}
+          onClose={() => setShowModelPicker(false)}
+        />
+      )}
+
+      {/* Session picker overlay */}
+      {showSessionPicker && (
+        <SessionPicker
+          onSelect={(sess) => {
+            setShowSessionPicker(false)
+            loadAndReplaceSession(sess)
+          }}
+          onClose={() => setShowSessionPicker(false)}
+        />
+      )}
+
+      {/* Normal UI — hidden while any overlay is open */}
+      {!showSetup && !showModelPicker && !showSessionPicker && (
         <>
           {/* Welcome banner — shown only before first message */}
           {messages.length === 0 && streamingText.length === 0 && (
@@ -475,26 +535,18 @@ export function App({ runtime, session, permissions, model, provider, systemProm
 
       {/* Permission confirmation prompt */}
       {pendingPerm && (
-        <Box flexDirection="column" paddingX={1} paddingY={0}>
-          <Box gap={1}>
-            <Text color="yellow" bold>[permission]</Text>
-            <Text color="yellow">{pendingPerm.toolName}</Text>
-          </Box>
-          {typeof (pendingPerm.input as Record<string, unknown>)?.['command'] === 'string' && (
-            <Box paddingLeft={2}>
-              <Text dimColor>{String((pendingPerm.input as Record<string, unknown>)['command']).split('\n')[0]?.slice(0, 80)}</Text>
-            </Box>
-          )}
-          {typeof (pendingPerm.input as Record<string, unknown>)?.['path'] === 'string' && (
-            <Box paddingLeft={2}>
-              <Text dimColor>{String((pendingPerm.input as Record<string, unknown>)['path'])}</Text>
-            </Box>
-          )}
-          <Text>Allow? <Text color="green">y</Text><Text dimColor>/</Text><Text color="red">N</Text></Text>
-        </Box>
+        <PermissionPrompt
+          callId={pendingPerm.callId}
+          toolName={pendingPerm.toolName}
+          input={pendingPerm.input}
+          permissions={permissions}
+          onAllow={handlePermAllow}
+          onAllowAlways={handlePermAllowAlways}
+          onDeny={handlePermDeny}
+        />
       )}
 
-      {/* Input — disabled while setup is open */}
+      {/* Input — disabled while any overlay is open or agent is busy */}
       <PromptInput
         mode={mode}
         value={inputValue}
@@ -502,7 +554,7 @@ export function App({ runtime, session, permissions, model, provider, systemProm
         onSubmit={onSubmit}
         onTabEmpty={onTabEmpty}
         onCtrlC={onCtrlC}
-        disabled={busy || showSetup}
+        disabled={busy || showSetup || showModelPicker || showSessionPicker}
         skillNames={skillNames}
         onHistoryUp={onHistoryUp}
         onHistoryDown={onHistoryDown}

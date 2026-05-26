@@ -91,7 +91,7 @@ export interface ReplCommandResult {
   /** If set, inject this as the full prompt for the next agent turn */
   injectPrompt?: string
   /** If set, open an interactive modal in the TUI */
-  openModal?: 'provider-setup'
+  openModal?: 'provider-setup' | 'model-picker' | 'session-picker'
   /** If set, toggle orchestrator mode on/off */
   toggleOrchestrator?: boolean
   /** If set, update thinking mode */
@@ -249,25 +249,8 @@ export async function handleReplCommand(
         }
       }
 
-      // List sessions
-      if (all.length === 0) return { handled: true, output: 'No saved sessions.' }
-
-      const now = Date.now()
-      const lines = ['Saved sessions (newest first):', '']
-      for (let i = 0; i < all.length; i++) {
-        const m = all[i]!
-        const age = now - m.updatedAt
-        const timeAgo = age < 60_000 ? 'just now'
-          : age < 3_600_000 ? `${Math.floor(age / 60_000)}m ago`
-          : age < 86_400_000 ? `${Math.floor(age / 3_600_000)}h ago`
-          : `${Math.floor(age / 86_400_000)}d ago`
-        const title = (m.title ?? '(no title)').slice(0, 40).padEnd(40)
-        const msgs  = String(m.messageCount).padStart(3)
-        lines.push(`  ${m.id.slice(0, 8)}  ${title}  ${msgs} msgs  ${timeAgo}`)
-      }
-      lines.push('')
-      lines.push('Use /sessions <id> to load one.')
-      return { handled: true, output: lines.join('\n') }
+      // No prefix — open interactive session picker
+      return { handled: true, openModal: 'session-picker' }
     }
 
     case 'new': {
@@ -407,39 +390,8 @@ export async function handleReplCommand(
         return { handled: true, output: `Model switched to: ${target}` }
       }
 
-      // /model (no args) → show current model + cached models for current provider
-      const { loadConfig } = await import('@nekocode/core')
-      const cfg = await loadConfig()
-      const currentProvider = (cfg.model ?? '').split('/')[0] ?? 'anthropic'
-      const cached = cfg.models?.[currentProvider] ?? []
-
-      const lines = [`Current model: ${ctx.model}`, '']
-
-      if (cached.length > 0) {
-        lines.push(`Cached models for ${currentProvider} (${cached.length}):`)
-        for (const m of cached.slice(0, 30)) {
-          const marker = ctx.model === `${currentProvider}/${m}` ? ' ◀' : ''
-          lines.push(`  ${currentProvider}/${m}${marker}`)
-        }
-        if (cached.length > 30) lines.push(`  ... and ${cached.length - 30} more`)
-        lines.push('', 'Use /model <name> to search, /model refresh to update list')
-      } else {
-        lines.push('No cached models. Configure a provider first:')
-        lines.push('  /connect <provider> <apiKey>')
-        lines.push('', 'Or switch directly:')
-        lines.push('  /model anthropic/claude-opus-4-7')
-        lines.push('  /model deepseek/deepseek-chat')
-      }
-
-      lines.push('', 'Configured providers:')
-      for (const [key, p] of Object.entries(PRESETS)) {
-        const hasKey = cfg.providers?.[key]?.apiKey || (p.apiKeyEnv && process.env[p.apiKeyEnv])
-        const marker = hasKey ? '✓' : ' '
-        const env = p.apiKeyEnv ? `  (${p.apiKeyEnv})` : ''
-        lines.push(`  [${marker}] ${key.padEnd(14)} ${p.name}${env}`)
-      }
-
-      return { handled: true, output: lines.join('\n') }
+      // /model (no args) → interactive model picker
+      return { handled: true, openModal: 'model-picker' }
     }
 
     case 'connect': {
