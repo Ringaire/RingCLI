@@ -183,7 +183,7 @@ const HELP = `
 │                                                              │
 │ Agent                                                        │
 │   /model [id]            Show cached models, fuzzy search, or switch  │
-│   /model refresh         Re-fetch model list from provider API        │
+│   /model refresh|reload   Re-fetch model list from provider API        │
 │   /connect [prov] [key]  Configure provider connection      │
 │   /mcp <name> <cmd>      Add MCP server for this session    │
 │   /think [on|off] [N]    Extended thinking (N=token budget) │
@@ -312,8 +312,8 @@ export async function handleReplCommand(
     case 'model': {
       const target = args.trim()
 
-      // /model refresh → re-fetch models for current provider
-      if (target === 'refresh') {
+      // /model refresh | reload → re-fetch models for current provider
+      if (target === 'refresh' || target === 'reload') {
         const { loadConfig, saveConfig } = await import('@nekocode/core')
         const cfg = await loadConfig()
         const currentProvider = (cfg.model ?? '').split('/')[0] ?? 'anthropic'
