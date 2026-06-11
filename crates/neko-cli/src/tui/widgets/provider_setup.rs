@@ -15,7 +15,7 @@ use neko_providers::ProviderKind;
 
 use crate::tui::theme::{UI, MUTED, ERR};
 
-use super::core::scroll_list::{anchor_above, label, pointer, ScrollList};
+use super::core::scroll_list::{anchor_below, label, pointer, ScrollList};
 
 const VISIBLE:       usize = 9;
 const MODEL_VISIBLE: usize = 10;
@@ -339,8 +339,8 @@ impl ProviderSetupModal {
         }
     }
 
-    pub fn area(parent: Rect, input_y: u16, h: u16) -> Rect {
-        anchor_above(parent, input_y, h)
+    pub fn area(parent: Rect, y: u16, h: u16) -> Rect {
+        anchor_below(parent, y, h)
     }
 
     pub fn clear() -> Clear { Clear }

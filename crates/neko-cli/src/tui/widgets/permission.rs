@@ -8,7 +8,7 @@ use ratatui::{
 use crate::tui::theme::{MUTED, MAIN, WARN};
 use unicode_width::UnicodeWidthStr;
 
-use super::core::scroll_list::{anchor_above, pointer, ScrollList};
+use super::core::scroll_list::{anchor_below, pointer, ScrollList};
 
 const MAX_VISIBLE: usize = 4;
 /// 分隔符行。
@@ -58,8 +58,9 @@ impl PermissionModal {
         self.calc_height()
     }
 
-    pub fn area(parent: Rect, input_y: u16, h: u16) -> Rect {
-        anchor_above(parent, input_y, h)
+    /// 锚定在输入框下方。
+    pub fn area(parent: Rect, y: u16, h: u16) -> Rect {
+        anchor_below(parent, y, h)
     }
 
     pub fn render(&self) -> Paragraph<'static> {

@@ -900,9 +900,8 @@ async fn handle_key(
                 state.input.set(next);
             }
         }
-        KeyCode::PageUp | KeyCode::PageDown => {
-            // terminal handles scroll natively
-        }
+        KeyCode::PageUp => { state.chat.scroll_up(10); }
+        KeyCode::PageDown => { state.chat.scroll_down(10); }
         _ => {}
     }
 

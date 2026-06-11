@@ -7,7 +7,7 @@ use ratatui::{
 
 use crate::tui::theme::{UI, MUTED, OK};
 
-use super::core::scroll_list::{anchor_above, label, pointer, ScrollList};
+use super::core::scroll_list::{anchor_below, label, pointer, ScrollList};
 
 const MAX_VISIBLE: usize = 12;
 
@@ -62,8 +62,8 @@ impl ModelPickerModal {
         }
     }
 
-    pub fn area(parent: Rect, input_y: u16, h: u16) -> Rect {
-        anchor_above(parent, input_y, h)
+    pub fn area(parent: Rect, y: u16, h: u16) -> Rect {
+        anchor_below(parent, y, h)
     }
 
     pub fn render(&self) -> Paragraph<'static> {

@@ -121,6 +121,14 @@ pub fn anchor_above(parent: Rect, input_y: u16, h: u16) -> Rect {
     Rect { x: parent.x, y: input_y.saturating_sub(h), width: parent.width, height: h }
 }
 
+/// 把全宽浮层锚定到 `input_y` 下方（用于权限弹窗等需要放在输入框下面的场景）。
+pub fn anchor_below(parent: Rect, y: u16, h: u16) -> Rect {
+    let max_y = parent.y + parent.height;
+    let end = (y + h).min(max_y);
+    let actual_h = end.saturating_sub(y);
+    Rect { x: parent.x, y, width: parent.width, height: actual_h }
+}
+
 /// `❯ ` 焦点指针（选中时），否则两空格占位。
 pub fn pointer(selected: bool) -> Span<'static> {
     let s = if selected { "❯ " } else { "  " };
