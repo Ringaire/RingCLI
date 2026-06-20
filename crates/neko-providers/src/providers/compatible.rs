@@ -36,16 +36,31 @@ impl CompatibleProvider {
         base_url:  impl Into<String>,
         def_model: impl Into<String>,
     ) -> Self {
+        Self::with_client_and_extra(client, id, name, api_key, base_url, def_model, None)
+    }
+
+    pub fn with_client_and_extra(
+        client:     Client,
+        id:         impl Into<String>,
+        name:       impl Into<String>,
+        api_key:    impl Into<String>,
+        base_url:   impl Into<String>,
+        def_model:  impl Into<String>,
+        extra_body: Option<serde_json::Value>,
+    ) -> Self {
         let id_str   = id.into();
         let name_str = name.into();
         let def      = def_model.into();
-        let inner = OpenAiProvider::with_client(
+        let mut inner = OpenAiProvider::with_client(
             client,
             api_key,
             Some(base_url.into()),
             None,
             Some(def.clone()),
         );
+        if let Some(extra) = extra_body {
+            inner = inner.with_extra_body(extra);
+        }
         Self { inner, id: id_str, name: name_str, def_model: def }
     }
 }

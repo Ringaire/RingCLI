@@ -30,7 +30,7 @@ pub struct CommandMeta {
 /// 全部内置命令。顺序即帮助与补全的展示顺序。
 pub const COMMANDS: &[CommandMeta] = &[
     CommandMeta { name: "help",     description: "Show command list",                     arg_hint: None },
-    CommandMeta { name: "mode",     description: "Switch permission mode",                arg_hint: Some("build|edit|ask") },
+    CommandMeta { name: "mode",     description: "Switch permission mode",                arg_hint: Some("ask|edit|auto|bypass") },
     CommandMeta { name: "model",    description: "Show or switch model",                  arg_hint: Some("[provider/model-id]") },
     CommandMeta { name: "connect",  description: "Configure provider connection",         arg_hint: Some("[provider] [key] [url]") },
     CommandMeta { name: "think",    description: "Control thinking mode (on/off/show/hide/budget)", arg_hint: Some("on|off [budget] | show|hide") },
@@ -39,6 +39,7 @@ pub const COMMANDS: &[CommandMeta] = &[
     CommandMeta { name: "compact",  description: "Summarize & compact the conversation",  arg_hint: None },
     CommandMeta { name: "clear",    description: "Clear the screen / chat",               arg_hint: None },
     CommandMeta { name: "memory",   description: "List / search / delete memories",       arg_hint: Some("[search <q> | rm <id>]") },
+    CommandMeta { name: "init",     description: "Generate AGENTS.md for this project",  arg_hint: None },
     CommandMeta { name: "quit",     description: "Exit neko",                             arg_hint: None },
 ];
 
@@ -90,6 +91,8 @@ pub enum CommandOutcome {
     Resume(Uuid),
     /// 退出。
     Quit,
+    /// 生成 AGENTS.md：把生成任务作为 prompt 发给 agent。
+    InitAgentsMd,
     /// 已就地处理（或需主循环按命令名做 async 收尾，如 /sessions、/memory）。
     Handled,
 }
@@ -110,6 +113,13 @@ pub fn handle(text: &str, skills: &SkillRegistry) -> CommandOutcome {
     let lower_cmd = raw_cmd.to_lowercase();
     let cmd = canonical(&lower_cmd);
 
+    // `/` 开头但不是已知命令/skill，且 token 里含路径字符（`/` `\` `.`）→ 当普通消息发送，
+    // 不要把粘贴的文件路径（如 `/home/user/x.rs`、`/usr/bin/ls -la`）误吞成命令。
+    let is_known = COMMANDS.iter().any(|c| c.name == cmd) || skills.get(cmd).is_some();
+    if !is_known && raw_cmd.contains(['/', '\\', '.']) {
+        return CommandOutcome::NotACommand(text.to_string());
+    }
+
     match cmd {
         "help" => {
             print_help(skills);
@@ -118,7 +128,7 @@ pub fn handle(text: &str, skills: &SkillRegistry) -> CommandOutcome {
         "mode" => match rest.parse::<ModeName>() {
             Ok(mode) => CommandOutcome::SwitchMode(mode),
             Err(_) => {
-                println!("usage: /mode build|edit|ask");
+                println!("usage: /mode ask|edit|auto|bypass");
                 CommandOutcome::Handled
             }
         },
@@ -192,6 +202,7 @@ pub fn handle(text: &str, skills: &SkillRegistry) -> CommandOutcome {
         "compact" => CommandOutcome::Compact,
         // memory 子命令在主循环里异步执行。
         "memory" => CommandOutcome::Handled,
+        "init" => CommandOutcome::InitAgentsMd,
         "quit" => CommandOutcome::Quit,
         // 其余：尝试作为技能名。
         other => {
@@ -337,6 +348,26 @@ pub fn command_suggestions(input: &str, skills: &SkillRegistry) -> Vec<Suggestio
     out
 }
 
+/// 构建 `/init` 发给 agent 的 prompt，让它分析项目并生成 AGENTS.md。
+pub fn build_init_prompt(cwd: &std::path::Path) -> String {
+    format!(
+        "Analyze the project at `{}` and generate an `AGENTS.md` file in that directory.\n\n\
+        AGENTS.md is the project-level instruction file for AI coding assistants (equivalent to CLAUDE.md). \
+        It should be concise and actionable — not a tutorial.\n\n\
+        Include:\n\
+        - Project overview (1-2 sentences: what it is, language/stack)\n\
+        - Crate/module structure (for Rust: list crates and their roles)\n\
+        - Build & test commands (`cargo build`, `cargo test`, etc.)\n\
+        - Key architectural decisions and invariants the AI must respect\n\
+        - Coding conventions specific to this project\n\
+        - What NOT to do (common pitfalls, files not to modify, etc.)\n\n\
+        Use `tree`, `read_file`, `glob`, and `grep` to understand the project first. \
+        Then write the file with `write_file`. \
+        Keep it under 150 lines. No fluff.",
+        cwd.display()
+    )
+}
+
 /// 行内幽灵补全：首个候选相对当前输入多出的后缀（用于灰字提示）。
 pub fn inline_ghost(input: &str, suggestions: &[Suggestion]) -> String {
     if !input.starts_with('/') {
@@ -346,6 +377,96 @@ pub fn inline_ghost(input: &str, suggestions: &[Suggestion]) -> String {
         Some(s) if s.value.starts_with(input) && s.value != input => s.value[input.len()..].to_string(),
         _ => String::new(),
     }
+}
+
+// ── 压缩相关 ──────────────────────────────────────────────────────────────────
+
+/// compact 摘要请求的 system prompt。
+pub const COMPACT_SYSTEM_PROMPT: &str = "\
+You are compacting the earlier part of a coding agent conversation to save context window space.
+Summarize the assistant/tool work into a briefing the agent can resume from.
+Write under these headings, omitting any heading that has no content:
+
+## Goal
+The user's task and intent, in their own words.
+
+## Decisions
+Key choices made and why — so they are not re-derived or reversed.
+
+## Files & Code
+Files read or modified, with specific facts: function signatures, line ranges, exact edits applied.
+
+## Commands & Results
+Commands run (builds, tests, shell) and relevant outcomes — what passed, failed, error text that matters.
+
+## Errors & Fixes
+Problems encountered and how they were resolved (or not), so the same dead ends are not repeated.
+
+## Pending
+What is still in progress or unstarted, and the single most concrete next step.
+
+Rules: use bullet points and fragments, not prose. Preserve identifiers, paths, and numbers exactly. \
+Do NOT invent anything not present in the conversation.";
+
+/// 将消息列表渲染为给摘要模型看的文字稿。
+pub fn render_compact_transcript(messages: &[neko_core::tools::Message]) -> String {
+    use neko_core::tools::MessageRole;
+    let mut out = String::new();
+    for msg in messages {
+        let text = msg_text(msg);
+        match msg.role {
+            MessageRole::User => {
+                out.push_str("[user]\n");
+                out.push_str(&text);
+                out.push_str("\n\n");
+            }
+            MessageRole::Assistant => {
+                out.push_str("[assistant]\n");
+                out.push_str(&text);
+                out.push_str("\n\n");
+            }
+            MessageRole::ToolResult => {
+                // 工具结果：只取前 500 字符（大输出已有缓存机制，摘要里不需要全量）
+                let preview = if text.len() > 500 { &text[..500] } else { &text };
+                out.push_str("[tool result]\n");
+                out.push_str(preview);
+                if text.len() > 500 { out.push_str("\n…(truncated)"); }
+                out.push_str("\n\n");
+            }
+        }
+    }
+    out
+}
+
+fn msg_text(msg: &neko_core::tools::Message) -> String {
+    use neko_core::tools::ContentBlock;
+    msg.content.iter().filter_map(|b| match b {
+        ContentBlock::Text { text } => Some(text.as_str()),
+        _ => None,
+    }).collect::<Vec<_>>().join("\n")
+}
+
+/// 检测消息列表开头是否已有摘要消息，若有则剥离并返回其文本。
+/// 返回 `(prior_summary, new_messages_slice)`。
+pub fn split_for_compact(messages: &[neko_core::tools::Message]) -> (Option<String>, &[neko_core::tools::Message]) {
+    if let Some(first) = messages.first() {
+        let text = msg_text(first);
+        if text.starts_with("[Conversation Summary]") {
+            let prior = text["[Conversation Summary]".len()..].trim().to_string();
+            return (Some(prior), &messages[1..]);
+        }
+    }
+    (None, messages)
+}
+
+/// 构造压缩后的摘要消息，若有历史摘要则以 `---` 分隔拼接。
+pub fn build_compact_message(prior: Option<&str>, new_summary: &str) -> neko_core::tools::Message {
+    use neko_core::tools::{ContentBlock, MessageRole};
+    let text = match prior {
+        Some(p) => format!("[Conversation Summary]\n{p}\n\n---\n\n{new_summary}"),
+        None    => format!("[Conversation Summary]\n{new_summary}"),
+    };
+    neko_core::tools::Message::new(MessageRole::Assistant, vec![ContentBlock::Text { text }])
 }
 
 /// 命令名敲完（已含空格）后的参数提示。

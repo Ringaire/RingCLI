@@ -10,10 +10,11 @@ use crate::tui::theme::{mode_color, ACCENT, MAIN, MUTED, UI};
 
 fn mode_desc(mode: &str) -> &'static str {
     match mode {
-        "build" => "all tools allowed",
-        "edit"  => "no shell execution",
-        "ask"   => "read-only, no writes",
-        _       => "",
+        "auto"   => "all tools auto-approved",
+        "edit"   => "file edits auto-approved, no shell",
+        "ask"    => "read-only, no writes",
+        "bypass" => "all permission checks skipped",
+        _        => "",
     }
 }
 
@@ -40,7 +41,7 @@ fn welcome_lines(model: &str, mode: &str, cwd: &str) -> Vec<Line<'static>> {
     lines.push(Line::from(vec![
         Span::styled("  /\\  /\\   ", Style::default().fg(UI)),
         Span::styled("✻ ", Style::default().fg(ACCENT)),
-        Span::styled("Welcome to NekoCode", Style::default().fg(UI).add_modifier(Modifier::BOLD)),
+        Span::styled("Welcome to NekoCLI", Style::default().fg(UI).add_modifier(Modifier::BOLD)),
         Span::styled(format!(" v{VERSION}"), Style::default().fg(MUTED)),
     ]));
     lines.push(Line::from(vec![
@@ -70,7 +71,7 @@ fn welcome_lines(model: &str, mode: &str, cwd: &str) -> Vec<Line<'static>> {
     lines.push(Line::from(""));
 
     let tips: &[(&str, &str)] = &[
-        ("Tab",             "cycle mode: build → edit → ask"),
+        ("Tab",             "cycle mode: ask → edit → auto → bypass"),
         ("↑ / ↓",          "browse input history"),
         ("@file.ts",        "attach file or directory to message"),
         ("Ctrl+A / Ctrl+E", "line start / end"),

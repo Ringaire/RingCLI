@@ -53,6 +53,9 @@ pub struct CatalogEntry {
     /// 该 provider 的默认模型 id；None = 未知（如用户自定义 provider，需在 config.model 指定）。
     #[serde(default)]
     pub default_model: Option<String>,
+    /// 注入到每个请求 body 顶层的额外字段（如 Ollama 的 `options.num_ctx`）。
+    #[serde(default)]
+    pub extra_body: Option<serde_json::Value>,
 }
 
 /// 用户覆盖文件里的条目——所有字段都是可选的。
@@ -64,6 +67,7 @@ struct Override {
     base_url: Option<String>,
     api_key_env: Option<String>,
     default_model: Option<String>,
+    extra_body: Option<serde_json::Value>,
 }
 
 // ── 公开 API ──────────────────────────────────────────────────────────────────
@@ -125,6 +129,7 @@ fn merge_file(catalog: &mut HashMap<String, CatalogEntry>, path: &Path) {
             if let Some(u) = ov.base_url { entry.base_url = Some(u); }
             if let Some(e) = ov.api_key_env { entry.api_key_env = Some(e); }
             if let Some(m) = ov.default_model { entry.default_model = Some(m); }
+            if let Some(b) = ov.extra_body { entry.extra_body = Some(b); }
         } else {
             // 新增自定义 provider：必须有 type + base_url
             let Some(kind) = ov.kind else {
@@ -141,6 +146,7 @@ fn merge_file(catalog: &mut HashMap<String, CatalogEntry>, path: &Path) {
                 base_url: Some(base_url),
                 api_key_env: ov.api_key_env,
                 default_model: ov.default_model,
+                extra_body: ov.extra_body,
             });
         }
     }

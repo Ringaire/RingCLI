@@ -355,6 +355,12 @@ async fn run_loop<B: ratatui::backend::Backend>(
             }
             Some(result) = done_rx.recv() => {
                 finish_turn(&mut state, result);
+                // Auto-compact：上下文占用 ≥ 80% 时自动压缩
+                if state.tokens > 0 && state.context_window > 0
+                    && state.tokens * 100 / state.context_window >= 80
+                {
+                    compact_tui(runtime, &ctx, &mut state).await;
+                }
                 // 消费队列：一轮完成后自动处理下一条排队消息
                 if !state.queued_messages.is_empty() {
                     let text = state.queued_messages.remove(0);
@@ -785,9 +791,10 @@ async fn handle_key(
             } else {
                 // 循环切换权限模式 build → edit → ask
                 let next = match runtime.mode {
-                    neko_core::ModeName::Build => neko_core::ModeName::Edit,
-                    neko_core::ModeName::Edit  => neko_core::ModeName::Ask,
-                    neko_core::ModeName::Ask   => neko_core::ModeName::Build,
+                    neko_core::ModeName::Ask    => neko_core::ModeName::Edit,
+                    neko_core::ModeName::Edit   => neko_core::ModeName::Auto,
+                    neko_core::ModeName::Auto   => neko_core::ModeName::Bypass,
+                    neko_core::ModeName::Bypass => neko_core::ModeName::Ask,
                 };
                 runtime.mode = next;
                 runtime.permissions.lock().await.set_mode(next);
@@ -867,6 +874,8 @@ async fn handle_key(
         KeyCode::End => {
             state.input.move_end();
         }
+        KeyCode::Up if alt => { state.chat.scroll_up(3); }
+        KeyCode::Down if alt => { state.chat.scroll_down(3); }
         KeyCode::Up => {
             if !state.suggestions.is_empty() {
                 let n = state.suggestions.len();
@@ -905,8 +914,13 @@ async fn handle_key(
         _ => {}
     }
 
-    // 输入变化后重算命令补全。导航键不改 input → 列表不变、idx 仍有效。
-    state.suggestions = crate::repl::commands::command_suggestions(&state.input.value, &runtime.skills);
+    // 输入变化后重算补全：光标处有 `@token` → 文件补全；否则 `/` 命令补全。
+    let cwd = std::path::Path::new(&state.cwd);
+    state.suggestions = crate::repl::file_complete::maybe_suggestions(
+        &state.input.value, state.input.cursor_pos, cwd,
+    ).unwrap_or_else(|| {
+        crate::repl::commands::command_suggestions(&state.input.value, &runtime.skills)
+    });
     if state.suggestion_idx >= state.suggestions.len() {
         state.suggestion_idx = 0;
     }
@@ -966,27 +980,42 @@ async fn handle_command(
             CmdResult::Handled
         }
         CommandOutcome::OpenModelPicker => {
-            // 在后台拉取模型列表（可能走网络，如 Anthropic 的 GET /v1/models），
-            // 拉完通过 picker_tx 回传，避免阻塞事件循环冻结 UI。
+            use super::widgets::model_picker::ModelEntry;
             let Some(provider) = runtime.provider.clone() else {
                 state.chat.add_system("No provider configured — run /connect first.");
                 return CmdResult::Handled;
             };
             let provider_id = provider.id().to_string();
             let active      = state.model.clone();
-            let tx          = picker_tx.clone();
+
+            // 1. 有缓存（config.models[provider]）→ 立即展示，不等网络；后台静默刷新磁盘缓存。
+            if let Some(ids) = runtime.config.models.get(&provider_id).filter(|v| !v.is_empty()) {
+                let entries = ids.iter()
+                    .map(|id| ModelEntry { id: id.clone(), display_name: id.clone() })
+                    .collect();
+                state.model_picker = Some(ModelPickerModal::new(provider_id.clone(), entries, active));
+                let pid = provider_id;
+                tokio::spawn(async move {
+                    let ids: Vec<String> = provider.list_models().await
+                        .unwrap_or_default().into_iter().map(|m| m.id).collect();
+                    crate::connect::cache_models(&pid, &ids).await;
+                });
+                return CmdResult::Handled;
+            }
+
+            // 2. 无缓存 → 后台拉取（loading…），拉完回传 picker 并存盘，下次即时。
+            let tx  = picker_tx.clone();
+            let pid = provider_id;
             state.status_msg = Some("loading models…".into());
             tokio::spawn(async move {
                 let models = provider.list_models().await.unwrap_or_default();
+                let ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
+                crate::connect::cache_models(&pid, &ids).await;
                 let entries = models
                     .into_iter()
-                    .map(|m| super::widgets::model_picker::ModelEntry {
-                        id:           m.id,
-                        display_name: m.display_name,
-                    })
+                    .map(|m| ModelEntry { id: m.id, display_name: m.display_name })
                     .collect();
-                let picker = ModelPickerModal::new(provider_id, entries, active);
-                let _ = tx.send(picker).await;
+                let _ = tx.send(ModelPickerModal::new(pid, entries, active)).await;
             });
             CmdResult::Handled
         }
@@ -1009,7 +1038,7 @@ async fn handle_command(
             CmdResult::Handled
         }
         CommandOutcome::Compact => {
-            state.chat.add_system("compact is available in plain mode (--no-tui) for now");
+            compact_tui(runtime, ctx, state).await;
             CmdResult::Handled
         }
         CommandOutcome::Resume(id) => {
@@ -1017,6 +1046,19 @@ async fn handle_command(
             CmdResult::Handled
         }
         CommandOutcome::Quit => CmdResult::Quit,
+        CommandOutcome::InitAgentsMd => {
+            let agents_path = runtime.cwd.join("AGENTS.md");
+            if agents_path.exists() {
+                state.chat.add_system(format!(
+                    "AGENTS.md already exists at {}. Ask neko to update it, or delete it first.",
+                    agents_path.display()
+                ));
+                return CmdResult::Handled;
+            }
+            let prompt = build_init_prompt(&runtime.cwd);
+            state.chat.add_system("generating AGENTS.md…");
+            CmdResult::Send(prompt)
+        }
         CommandOutcome::Handled => {
             let trimmed = text.trim();
             if trimmed == "/sessions" || trimmed == "/ls" || trimmed == "/resume" {
@@ -1106,12 +1148,15 @@ async fn start_turn(
         return;
     };
 
+    // 聊天区显示用户原文（保留 `@path` token）；发给模型的消息追加被引用文件的内容。
     state.chat.add_user(text.clone());
+    let attachments = crate::repl::file_complete::expand_mentions(&text, std::path::Path::new(&state.cwd));
+    let model_text = if attachments.is_empty() { text } else { format!("{text}{attachments}") };
 
     // 添加用户消息并持久化
     let session_id = runtime.session.meta.id;
     {
-        let msg = Message::user_text(text);
+        let msg = Message::user_text(model_text);
         let mut guard = ctx.lock().await;
         guard.add_message(msg.clone());
         drop(guard);
@@ -1196,24 +1241,63 @@ fn draw<B: ratatui::backend::Backend>(term: &mut Terminal<B>, state: &mut AppSta
     term.draw(|frame| {
         let area = frame.area();
         let input_lines = state.input.visual_line_count(area.width);
-        let layout = AppLayout::compute(area, input_lines);
+        let base = AppLayout::compute(area, input_lines);
+
+        // 哪个下拉菜单处于激活态 + 其高度（统一渲染在输入框正下方）。
+        let show_suggestions = !state.suggestions.is_empty() && state.pending.is_none()
+            && state.session_picker.is_none() && state.model_picker.is_none()
+            && state.provider_setup.is_none();
+        let menu_h: u16 = if let Some(p) = &state.pending {
+            p.modal.height()
+        } else if let Some(pk) = &state.model_picker {
+            pk.height()
+        } else if let Some(pk) = &state.session_picker {
+            pk.height()
+        } else if let Some(s) = &state.provider_setup {
+            s.height()
+        } else if show_suggestions {
+            suggestions::height(state.suggestions.len())
+        } else {
+            0
+        };
+
+        // 菜单激活时在输入框正下方碾出一段高度（chat 让位），保证菜单完整可见、`❯` 不被裁。
+        let (chat_area, input_area, footer_area, menu_area) = if menu_h == 0 {
+            (base.chat, base.input, base.footer, None)
+        } else {
+            use ratatui::layout::{Constraint, Direction, Layout};
+            let input_h  = base.input.height;
+            let footer_h = base.footer.height.max(1);
+            let avail = area.height.saturating_sub(input_h + footer_h + 1).max(1);
+            let mh = menu_h.min(avail);
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(1),          // chat（收缩让位）
+                    Constraint::Length(input_h), // input
+                    Constraint::Length(mh),      // 菜单（输入框正下方）
+                    Constraint::Length(footer_h),// footer
+                ])
+                .split(area);
+            (chunks[0], chunks[1], chunks[3], Some(chunks[2]))
+        };
 
         // chat area
         let show_welcome = !state.chat.has_conversation();
         if show_welcome {
             frame.render_widget(
                 render_welcome(&state.model, &state.mode, &state.cwd),
-                layout.chat,
+                chat_area,
             );
         } else {
-            let chat_widget = state.chat.render(layout.chat, state.think_show, state.active_sub_agent);
-            frame.render_widget(chat_widget, layout.chat);
+            let chat_widget = state.chat.render(chat_area, state.think_show, state.active_sub_agent);
+            frame.render_widget(chat_widget, chat_area);
         }
 
         // input box
         let ghost = crate::repl::commands::inline_ghost(&state.input.value, &state.suggestions);
         let arg_hint = crate::repl::commands::argument_hint(&state.input.value);
-        frame.render_widget(state.input.render(&state.mode, &ghost, arg_hint, layout.input.width), layout.input);
+        frame.render_widget(state.input.render(&state.mode, &ghost, arg_hint, input_area.width), input_area);
 
         // footer（状态栏，输入框下方紧凑行）
         {
@@ -1222,7 +1306,7 @@ fn draw<B: ratatui::backend::Backend>(term: &mut Terminal<B>, state: &mut AppSta
             let dim = ratatui::style::Style::default().fg(MUTED);
             let bold_dim = dim.add_modifier(ratatui::style::Modifier::BOLD);
             let mcolor = super::theme::mode_color(&state.mode);
-            let max_w = layout.footer.width as usize;
+            let max_w = footer_area.width as usize;
 
             let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
 
@@ -1282,72 +1366,115 @@ fn draw<B: ratatui::backend::Backend>(term: &mut Terminal<B>, state: &mut AppSta
 
             frame.render_widget(
                 ratatui::widgets::Paragraph::new(ratatui::text::Line::from(spans)),
-                layout.footer,
+                footer_area,
             );
         }
 
-        // cursor
+        // cursor（picker/向导/权限激活时隐藏；仅 suggestions 时仍在输入框内）
         if state.pending.is_none() && state.session_picker.is_none()
             && state.model_picker.is_none() && state.provider_setup.is_none()
         {
-            let (cx, cy) = state.input.cursor_screen_pos(layout.input);
+            let (cx, cy) = state.input.cursor_screen_pos(input_area);
             frame.set_cursor_position((cx, cy));
         }
 
-        // 浮层
-        let show_suggestions = !state.suggestions.is_empty() && state.pending.is_none()
-            && state.session_picker.is_none() && state.model_picker.is_none()
-            && state.provider_setup.is_none();
-
-        if state.pending.is_none() && !show_suggestions
-            && state.show_tasks && !state.tasks.is_empty()
-        {
-            let panel_area = tasks::area(area, layout.input.y, state.tasks.len());
+        // 任务面板（Ctrl+T）：无下拉菜单时锚定输入框上方
+        if menu_h == 0 && state.show_tasks && !state.tasks.is_empty() {
+            let panel_area = tasks::area(area, base.input.y, state.tasks.len());
             frame.render_widget(ratatui::widgets::Clear, panel_area);
             frame.render_widget(tasks::render(&state.tasks), panel_area);
         }
 
-        if show_suggestions {
-            let sg_area = suggestions::area(area, layout.input.y, state.suggestions.len());
-            frame.render_widget(ratatui::widgets::Clear, sg_area);
-            frame.render_widget(
-                suggestions::render(&state.suggestions, state.suggestion_idx),
-                sg_area,
-            );
-        }
-
-        // permission select
-        if let Some(p) = &state.pending {
-            let h = p.modal.height();
-            let modal_area = PermissionModal::area(area, layout.input.y, h);
-            frame.render_widget(PermissionModal::clear(), modal_area);
-            frame.render_widget(p.modal.render(), modal_area);
-        }
-
-        // 模型选择器
-        if let Some(picker) = &state.model_picker {
-            let h = picker.height();
-            let picker_area = ModelPickerModal::area(area, layout.input.y, h);
-            frame.render_widget(ModelPickerModal::clear(), picker_area);
-            frame.render_widget(picker.render(), picker_area);
-        }
-
-        // 会话选择器
-        if let Some(picker) = &state.session_picker {
-            let h = picker.height();
-            let picker_area = SessionPickerModal::area(area, layout.input.y, h);
-            frame.render_widget(SessionPickerModal::clear(), picker_area);
-            frame.render_widget(picker.render(), picker_area);
-        }
-
-        // /connect 向导
-        if let Some(setup) = &state.provider_setup {
-            let h = setup.height();
-            let setup_area = ProviderSetupModal::area(area, layout.input.y, h);
-            frame.render_widget(ProviderSetupModal::clear(), setup_area);
-            frame.render_widget(setup.render(), setup_area);
+        // 下拉菜单：全部统一渲染在输入框正下方的 menu 区（命令补全 / 权限 / 各 picker / 向导）
+        if let Some(m) = menu_area {
+            frame.render_widget(ratatui::widgets::Clear, m);
+            if let Some(p) = &state.pending {
+                frame.render_widget(p.modal.render(), m);
+            } else if let Some(picker) = &state.model_picker {
+                frame.render_widget(picker.render(), m);
+            } else if let Some(picker) = &state.session_picker {
+                frame.render_widget(picker.render(), m);
+            } else if let Some(setup) = &state.provider_setup {
+                frame.render_widget(setup.render(), m);
+            } else if show_suggestions {
+                frame.render_widget(
+                    suggestions::render(&state.suggestions, state.suggestion_idx),
+                    m,
+                );
+            }
         }
     }).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     Ok(())
+}
+
+fn build_init_prompt(cwd: &std::path::Path) -> String {
+    crate::repl::commands::build_init_prompt(cwd)
+}
+
+/// TUI 版会话压缩：直接调 provider 生成摘要，替换消息历史。
+async fn compact_tui(
+    runtime: &BootstrappedRuntime,
+    ctx:     &Arc<TokioMutex<AgentContext>>,
+    state:   &mut AppState,
+) {
+    use neko_core::tools::ContentBlock;
+    use neko_providers::provider::ChatRequest;
+    use crate::repl::commands::{
+        COMPACT_SYSTEM_PROMPT, render_compact_transcript,
+        split_for_compact, build_compact_message,
+    };
+
+    let (messages, session_id) = {
+        let guard = ctx.lock().await;
+        (guard.messages.clone(), runtime.session.meta.id)
+    };
+
+    let (prior_summary, new_messages) = split_for_compact(&messages);
+
+    if new_messages.len() < 4 {
+        state.chat.add_system("nothing to compact (conversation too short)");
+        return;
+    }
+
+    let Some(provider) = runtime.provider.clone() else {
+        state.chat.add_system("no provider configured — run /connect first");
+        return;
+    };
+
+    state.chat.add_system("compacting conversation…");
+
+    let transcript = render_compact_transcript(new_messages);
+    let mut req = ChatRequest::new(runtime.model.clone(), vec![Message::user_text(transcript)]);
+    req.system      = Some(COMPACT_SYSTEM_PROMPT.to_string());
+    req.temperature = Some(0.3);
+    req.max_tokens  = 4096;
+
+    let signal = CancellationToken::new();
+    match provider.chat(&req, signal).await {
+        Ok(resp) => {
+            let summary = resp.message.content.iter()
+                .filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None })
+                .collect::<Vec<_>>().join("\n");
+            let summary = summary.trim().to_string();
+            if summary.is_empty() {
+                state.chat.add_system("compact: model returned empty summary, keeping full history");
+                return;
+            }
+            let n = messages.len();
+            let summary_msg = build_compact_message(prior_summary.as_deref(), &summary);
+            {
+                let mut guard = ctx.lock().await;
+                guard.replace_messages(vec![summary_msg.clone()]);
+            }
+            session::replace_messages(session_id, &[summary_msg]).await.ok();
+            state.chat.add_system(&format!(
+                "compacted: {} messages → summary ({} chars)",
+                n, summary.len()
+            ));
+        }
+        Err(e) => {
+            state.chat.add_system(&format!("compact failed: {e}"));
+        }
+    }
 }

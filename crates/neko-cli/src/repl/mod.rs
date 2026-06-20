@@ -1,5 +1,6 @@
 pub mod cmd;
 pub mod commands;
+pub mod file_complete;
 pub mod history;
 pub mod printer;
 
@@ -8,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use neko_core::session;
-use neko_core::tools::{Message, MessageRole};
+use neko_core::tools::Message;
 use neko_providers::provider::DEFAULT_THINKING_BUDGET;
 
 use crate::agent::{AgentContext, AgentExecutor, TurnResult};
@@ -19,10 +20,10 @@ use commands::CommandOutcome;
 use history::History;
 
 /// REPL 入口：先 bootstrap，再进入 TUI 或 plain 模式。
-pub async fn run(_session_id: Option<Uuid>, args: &Args) -> Result<()> {
-    let runtime = bootstrap::bootstrap(args).await?;
+pub async fn run(session_id: Option<Uuid>, args: &Args) -> Result<()> {
+    let runtime = bootstrap::bootstrap(args, session_id).await?;
 
-    if args.no_tui {
+    if args.no_tui || args.print {
         run_plain(runtime, args).await
     } else {
         crate::tui::run_with_runtime(runtime, args).await
@@ -115,6 +116,15 @@ pub async fn run_plain(mut runtime: BootstrappedRuntime, args: &Args) -> Result<
                 resume_session(&mut runtime, &mut ctx, id).await?;
             }
             CommandOutcome::Quit => break,
+            CommandOutcome::InitAgentsMd => {
+                let agents_path = runtime.cwd.join("AGENTS.md");
+                if agents_path.exists() {
+                    println!("[AGENTS.md already exists at {}. Ask neko to update it, or delete it first.]", agents_path.display());
+                } else {
+                    let prompt = crate::repl::commands::build_init_prompt(&runtime.cwd);
+                    process_user_input(&mut runtime, &mut ctx, prompt, &mut reader).await?;
+                }
+            }
             CommandOutcome::Handled => {
                 let trimmed = input.trim();
                 if trimmed == "/sessions" || trimmed == "/ls" || trimmed == "/resume" {
@@ -139,7 +149,11 @@ async fn process_user_input(
     text:    String,
     reader:  &mut StdinReader,
 ) -> Result<()> {
-    let user_msg = Message::user_text(text);
+    // 展开 `@path` 引用：把 cwd 内被引用文件的内容追加到发给模型的消息。
+    let cwd = runtime.cwd.clone();
+    let attachments = crate::repl::file_complete::expand_mentions(&text, &cwd);
+    let model_text = if attachments.is_empty() { text } else { format!("{text}{attachments}") };
+    let user_msg = Message::user_text(model_text);
     ctx.add_message(user_msg.clone());
     session::append_message(runtime.session.meta.id, user_msg).await.ok();
 
@@ -293,84 +307,55 @@ async fn quick_connect(
     }
 }
 
-/// 上下文压缩：用内置 compact 技能生成摘要，替换历史。
+/// 上下文压缩：直接调 provider 生成结构化摘要，替换消息历史。
+/// 若已有历史摘要则保留作 pinned prefix，与新摘要拼接形成摘要链。
 async fn compact_context(runtime: &mut BootstrappedRuntime, ctx: &mut AgentContext) -> Result<()> {
-    if ctx.messages.len() < 4 {
+    use neko_core::tools::ContentBlock;
+    use neko_providers::provider::ChatRequest;
+    use crate::repl::commands::{
+        COMPACT_SYSTEM_PROMPT, render_compact_transcript,
+        split_for_compact, build_compact_message,
+    };
+
+    let (prior_summary, new_messages) = split_for_compact(&ctx.messages);
+
+    if new_messages.len() < 4 {
         println!("[nothing to compact]");
         return Ok(());
     }
-
-    println!("[compacting conversation...]");
-
-    let compact_prompt = runtime.skills.get("compact")
-        .map(|s| s.prompt.clone())
-        .unwrap_or_else(|| "Summarize the conversation so far concisely.".to_string());
-
-    // 临时上下文：发送压缩请求
-    let mut compact_ctx = AgentContext {
-        messages:      ctx.messages.clone(),
-        system:        ctx.system.clone(),
-        model:         ctx.model.clone(),
-        input_tokens:  0,
-        output_tokens: 0,
-    };
-    compact_ctx.add_message(Message::user_text(compact_prompt));
 
     let Some(provider) = runtime.provider.clone() else {
         println!("[no provider configured — run /connect first]");
         return Ok(());
     };
 
+    println!("[compacting conversation…]");
+
+    let transcript = render_compact_transcript(new_messages);
+    let mut req = ChatRequest::new(ctx.model.clone(), vec![Message::user_text(transcript)]);
+    req.system      = Some(COMPACT_SYSTEM_PROMPT.to_string());
+    req.temperature = Some(0.3);
+    req.max_tokens  = 4096;
+
     let signal = CancellationToken::new();
-    // 压缩是一次性总结，不持久化到会话 jsonl
-    let mut executor = AgentExecutor::main(
-        provider,
-        runtime.tools.clone(),
-        runtime.permissions.clone(),
-        runtime.bus.clone(),
-        runtime.session.meta.id,
-        runtime.cwd.clone(),
-        None,
-    );
-    executor.persist = false;
+    let resp = provider.chat(&req, signal).await?;
 
-    let mut sub = runtime.bus.subscribe();
-    let mut printer = printer::PlainPrinter::new();
-    let exec_fut = executor.run(&mut compact_ctx, signal);
-    tokio::pin!(exec_fut);
+    let summary_text: String = resp.message.content.iter()
+        .filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None })
+        .collect::<Vec<_>>().join("\n");
+    let summary_text = summary_text.trim().to_string();
 
-    let summary_text;
-    loop {
-        tokio::select! {
-            biased;
-            ev = sub.recv() => { if let Ok(ev) = ev { printer.handle(&ev); } }
-            _ = &mut exec_fut => {
-                while let Ok(ev) = sub.try_recv() { printer.handle(&ev); }
-                printer.finish();
-                summary_text = printer.take_assistant_text();
-                break;
-            }
-        }
-    }
-
-    if summary_text.trim().is_empty() {
+    if summary_text.is_empty() {
         println!("[compact produced no summary; keeping full history]");
         return Ok(());
     }
 
-    // 用摘要替换历史：保留 system，注入一条 summary 作为 assistant 上下文
-    let summary_msg = Message::new(
-        MessageRole::Assistant,
-        vec![neko_core::tools::ContentBlock::Text {
-            text: format!("[Previous conversation summary]\n{}", summary_text),
-        }],
-    );
+    let n = ctx.messages.len();
+    let summary_msg = build_compact_message(prior_summary.as_deref(), &summary_text);
     ctx.replace_messages(vec![summary_msg.clone()]);
-
-    // 持久化：重写会话消息
     session::replace_messages(runtime.session.meta.id, &ctx.messages).await.ok();
 
-    println!("[context compacted: {} tokens summary]", summary_text.len() / 4);
+    println!("[compacted: {} messages → summary ({} chars)]", n, summary_text.len());
     Ok(())
 }
 

@@ -12,6 +12,7 @@ use crate::catalog::{self, CatalogEntry, ProviderKind};
 use crate::provider::{build_http_client, DEFAULT_CONNECT_TIMEOUT_SECS};
 use crate::providers::{
     anthropic::AnthropicProvider,
+    claude_code::ClaudeCodeProvider,
     compatible::CompatibleProvider,
     gemini::GeminiProvider,
     openai::OpenAiProvider,
@@ -60,6 +61,7 @@ pub fn build_registry(config: &ResolvedConfig) -> ProviderBootstrap {
                     base_url: Some(base_url),
                     api_key_env: None,
                     default_model: None,
+                    extra_body: None,
                 }
             }
         };
@@ -79,7 +81,7 @@ pub fn build_registry(config: &ResolvedConfig) -> ProviderBootstrap {
             continue;
         }
 
-        register_one(&mut registry, &client, id, &cat_entry.kind, api_key, base_url, cat_entry.default_model.clone());
+        register_one(&mut registry, &client, id, &cat_entry.kind, api_key, base_url, cat_entry.default_model.clone(), cat_entry.extra_body.clone());
     }
 
     // ── 2. 自动注册无需 key 的 catalog provider（Ollama / LM Studio）─────────
@@ -88,8 +90,16 @@ pub fn build_registry(config: &ResolvedConfig) -> ProviderBootstrap {
         if entry.api_key_env.is_some() { continue; } // 需要 key，跳过
 
         let base_url = entry.base_url.clone();
-        register_one(&mut registry, &client, id, &entry.kind, String::new(), base_url, entry.default_model.clone());
+        register_one(&mut registry, &client, id, &entry.kind, String::new(), base_url, entry.default_model.clone(), entry.extra_body.clone());
         debug!(provider = %id, "auto-registered keyless provider");
+    }
+
+    // ── 3. 自动检测 claude CLI → 注册 claude-code provider ──────────────────
+    if !registry.contains("claude-code") {
+        if let Some(cc) = ClaudeCodeProvider::detect() {
+            registry.register(cc);
+            info!("auto-registered claude-code provider (claude CLI detected)");
+        }
     }
 
     let default_provider_id = pick_default(&registry, config);
@@ -114,6 +124,7 @@ fn register_one(
     api_key:       String,
     base_url:      Option<String>,
     default_model: Option<String>,
+    extra_body:    Option<serde_json::Value>,
 ) {
     match kind {
         ProviderKind::Anthropic => {
@@ -140,16 +151,15 @@ fn register_one(
                 warn!(provider = %id, "openai-compatible provider has no base_url");
                 String::new()
             });
-            // 默认模型来自 catalog（providers.json）；自定义 provider 未声明时留空，
-            // 由 config.model（向导落盘时写入）提供实际模型。
             let def_model = default_model.unwrap_or_default();
-            registry.register(CompatibleProvider::with_client(
+            registry.register(CompatibleProvider::with_client_and_extra(
                 client.clone(),
                 id.to_string(),
                 id.to_string(),
                 api_key,
                 base,
                 def_model,
+                extra_body,
             ));
             debug!(provider = %id, "registered openai-compatible");
         }
@@ -185,7 +195,12 @@ fn pick_default(registry: &ProviderRegistry, config: &ResolvedConfig) -> Option<
         if registry.contains(id) { return Some(id.clone()); }
     }
 
-    // 3. 无任何显式配置 → 不预设 provider
+    // 3. claude-code 兜底：有 claude CLI 但无 API key 时自动选择
+    if registry.contains("claude-code") && config.providers.is_empty() && config.model.is_none() {
+        return Some("claude-code".to_string());
+    }
+
+    // 4. 无任何显式配置 → 不预设 provider
     None
 }
 
@@ -203,7 +218,7 @@ pub fn build_probe_provider(
 ) -> Option<std::sync::Arc<dyn crate::provider::Provider>> {
     let client = build_http_client(proxy, DEFAULT_CONNECT_TIMEOUT_SECS);
     let mut registry = ProviderRegistry::new();
-    register_one(&mut registry, &client, id, kind, api_key, base_url, default_model);
+    register_one(&mut registry, &client, id, kind, api_key, base_url, default_model, None);
     registry.get(id)
 }
 

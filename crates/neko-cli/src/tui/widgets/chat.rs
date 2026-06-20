@@ -418,7 +418,9 @@ impl ChatWidget {
         let max_lines = area.height as usize;
         let mut lines = self.build_lines(width, show_reasoning, filter_sub);
 
-        // 保留视口范围内的行；scroll_offset > 0 时向上偏移（鼠标滚轮浏览历史）
+        // 视口处理：
+        // - 内容超过一屏：显示末尾 max_lines 行，scroll_offset>0 时向上偏移浏览历史；
+        // - 不足一屏：顶部补空行，使内容**底部对齐**贴近输入框（chat-app 观感），而非飘在顶部。
         if lines.len() > max_lines {
             let max_scroll = lines.len() - max_lines;
             let offset = self.scroll_offset.min(max_scroll);
@@ -426,6 +428,11 @@ impl ChatWidget {
             let start = end - max_lines;
             lines = lines.split_off(start);
             lines.truncate(max_lines);
+        } else if lines.len() < max_lines {
+            let pad = max_lines - lines.len();
+            let mut padded: Vec<Line<'static>> = vec![Line::from(""); pad];
+            padded.extend(lines);
+            lines = padded;
         }
 
         Paragraph::new(lines)

@@ -1,41 +1,66 @@
 use clap::Parser;
 use std::path::PathBuf;
-use uuid::Uuid;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "neko", about = "NekoCode — terminal AI coding assistant", version)]
+#[command(name = "neko", about = "NekoCLI — terminal AI coding assistant", version)]
 pub struct Args {
-    #[arg(help = "Initial prompt to send")]
+    /// Initial prompt to send (positional)
     pub prompt: Option<String>,
 
-    #[arg(long, default_value = "build", help = "Permission mode: build | edit | ask")]
+    /// Permission mode: ask | edit | auto | bypass
+    #[arg(long, default_value = "auto")]
     pub mode: String,
 
-    #[arg(long, help = "Resume a previous session by UUID")]
-    pub resume: Option<Uuid>,
+    /// Print response and exit (non-interactive, useful for pipes)
+    #[arg(short = 'p', long)]
+    pub print: bool,
 
-    #[arg(long, help = "List saved sessions")]
+    /// Continue the most recent conversation in the current directory
+    #[arg(short = 'c', long)]
+    pub r#continue: bool,
+
+    /// Resume a conversation by session UUID, or open picker with optional search
+    #[arg(short = 'r', long)]
+    pub resume: Option<String>,
+
+    /// List saved sessions
+    #[arg(long)]
     pub list_sessions: bool,
 
-    #[arg(long, help = "Model to use (overrides config)")]
+    /// Model to use (overrides config)
+    #[arg(long)]
     pub model: Option<String>,
 
-    #[arg(long, help = "Provider to use (overrides config)")]
+    /// Provider to use (overrides config)
+    #[arg(long)]
     pub provider: Option<String>,
 
-    #[arg(long, help = "Working directory (default: current dir)")]
+    /// Working directory (default: current dir)
+    #[arg(long)]
     pub cwd: Option<PathBuf>,
 
-    #[arg(long = "dangerously-skip-permissions", help = "Skip all permission checks")]
+    /// Skip all permission checks
+    #[arg(long = "dangerously-skip-permissions")]
     pub dangerously_skip_permissions: bool,
 
-    #[arg(long, help = "Enable extended thinking (Anthropic only)")]
+    /// Enable extended thinking (Anthropic only)
+    #[arg(long)]
     pub extended_thinking: bool,
 
-    #[arg(long, help = "Enable verbose debug logging")]
+    /// Enable verbose debug logging
+    #[arg(long, short = 'v')]
     pub verbose: bool,
 
-    #[arg(long = "no-tui", help = "Disable TUI, use plain output")]
+    /// Enable debug with optional category filter (e.g. "api,hooks")
+    #[arg(long)]
+    pub debug: Option<String>,
+
+    /// Additional directories to allow tool access to
+    #[arg(long = "add-dir")]
+    pub add_dir: Vec<PathBuf>,
+
+    /// Disable TUI, use plain output (same as --print)
+    #[arg(long = "no-tui")]
     pub no_tui: bool,
 }
 

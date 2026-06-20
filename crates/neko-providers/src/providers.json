@@ -137,13 +137,23 @@
     "type": "openai-compatible",
     "base_url": "http://localhost:11434/v1",
     "api_key_env": null,
-    "default_model": "llama3.2"
+    "default_model": "llama3.2",
+    "extra_body": {
+      "options": {
+        "num_ctx": 32768
+      }
+    }
   },
   "lmstudio": {
     "name": "LM Studio",
     "type": "openai-compatible",
     "base_url": "http://localhost:1234/v1",
     "api_key_env": null,
-    "default_model": "local-model"
+    "default_model": "local-model",
+    "extra_body": {
+      "options": {
+        "num_ctx": 32768
+      }
+    }
   }
 }

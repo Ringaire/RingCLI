@@ -109,11 +109,12 @@ fn parse_finish_reason(s: Option<&str>) -> StopReason {
 }
 
 pub struct OpenAiProvider {
-    client:    Client,
-    api_key:   String,
-    base_url:  String,
-    org_id:    Option<String>,
-    def_model: String,
+    client:     Client,
+    api_key:    String,
+    base_url:   String,
+    org_id:     Option<String>,
+    def_model:  String,
+    extra_body: Option<serde_json::Value>,
 }
 
 impl OpenAiProvider {
@@ -140,7 +141,13 @@ impl OpenAiProvider {
             base_url: base_url.unwrap_or_else(|| OPENAI_BASE_URL.to_string()),
             org_id,
             def_model: def_model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+            extra_body: None,
         }
+    }
+
+    pub fn with_extra_body(mut self, extra: serde_json::Value) -> Self {
+        self.extra_body = Some(extra);
+        self
     }
 
     fn build_body(&self, req: &ChatRequest, stream: bool) -> Value {
@@ -157,6 +164,15 @@ impl OpenAiProvider {
         }
         if req.max_tokens > 0 {
             body["max_tokens"] = json!(req.max_tokens);
+        }
+        // 合并 extra_body（catalog 注入的 provider 特有字段，如 Ollama 的 options.num_ctx）
+        if let Some(extra) = &self.extra_body {
+            if let Some(obj) = extra.as_object() {
+                let body_obj = body.as_object_mut().unwrap();
+                for (k, v) in obj {
+                    body_obj.entry(k).or_insert_with(|| v.clone());
+                }
+            }
         }
         body
     }
@@ -316,6 +332,17 @@ async fn run_openai_sse<S>(
                     };
                     let choice = &choices[0];
                     let delta  = &choice["delta"];
+
+                    // ── 推理 delta（DeepSeek 用 `reasoning_content`，OpenRouter 等用 `reasoning`）──
+                    if let Some(r) = delta["reasoning_content"].as_str()
+                        .or_else(|| delta["reasoning"].as_str())
+                    {
+                        if !r.is_empty() {
+                            let _ = tx.send(StreamEvent::Chunk(StreamChunk::ThinkingDelta {
+                                delta: r.to_string(),
+                            })).await;
+                        }
+                    }
 
                     // ── 文本 delta ──
                     if let Some(text) = delta["content"].as_str() {

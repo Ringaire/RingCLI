@@ -4,11 +4,17 @@
 //! 由各前端读返回值后自行更新会话上下文并渲染消息。
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use neko_core::{load_config, load_user_config, save_config, NekoUserConfig, ProviderEntry};
 
 use crate::bootstrap::BootstrappedRuntime;
+
+/// 串行化配置文件的读-改-写，避免后台模型缓存（`cache_models`）与 `/connect` 落盘并发互相覆盖。
+fn config_write_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
 
 /// `/model` 切换结果（前端据此渲染）。
 pub enum SwitchResult {
@@ -96,6 +102,21 @@ pub async fn quick_connect(
     }
 }
 
+/// 把拉取到的模型 id 列表缓存进全局配置的 `models[provider]`（对照 bun 的 `/model refresh`），
+/// 供 `/model` 下次即时展示，无需再等网络。空列表不写。
+pub async fn cache_models(provider_id: &str, ids: &[String]) {
+    if ids.is_empty() {
+        return;
+    }
+    // 持锁完成 load→改→save，确保读到的是最新配置（不会用旧快照覆盖并发的 /connect 写入）。
+    let _guard = config_write_lock().lock().await;
+    let mut cfg = load_user_config().await;
+    cfg.models
+        .get_or_insert_with(Default::default)
+        .insert(provider_id.to_string(), ids.to_vec());
+    let _ = save_config(&cfg).await;
+}
+
 /// 落盘 `cfg` 并重建 provider 注册表 + 热替换当前 provider/model/config（不动 ctx/UI）。
 ///
 /// 向导（`finish_setup`）与 `quick_connect` 共用。成功后 `runtime.provider` 必为 `Some`。
@@ -106,7 +127,11 @@ pub async fn apply_config_reload(
     provider_id: &str,
     model:       &str,
 ) -> Result<(), String> {
-    save_config(cfg).await.map_err(|e| format!("save failed: {e}"))?;
+    {
+        // 与 cache_models 共用写锁，避免后台模型缓存覆盖刚连上的 provider/model。
+        let _guard = config_write_lock().lock().await;
+        save_config(cfg).await.map_err(|e| format!("save failed: {e}"))?;
+    }
 
     let resolved = load_config(Some(cwd)).await;
     let boot = neko_providers::build_registry(&resolved);

@@ -147,6 +147,8 @@ cargo run --release
 |--------|------|
 | `Tab` | 切换模式 (build → edit → ask) |
 | `↑ / ↓` | 浏览输入历史 |
+| `Alt+↑ / Alt+↓` | 滚动聊天记录（行级） |
+| `Page Up / Page Down` | 滚动聊天记录（页级） |
 | `Ctrl+A / Ctrl+E` | 行首 / 行尾 |
 | `Ctrl+C` | 清空输入或退出 |
 | `@file.ts` | 附加文件或目录 |

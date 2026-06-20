@@ -2,9 +2,13 @@ use tracing_subscriber::EnvFilter;
 use crate::args::Args;
 
 pub fn setup_tracing(args: &Args) {
-    let level = if args.verbose { "debug" } else { "warn" };
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(format!("neko={level},neko_core={level}")));
+    let level = if args.verbose { "debug" } else if args.debug.is_some() { "debug" } else { "warn" };
+    let filter = match &args.debug {
+        Some(cat) => EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(format!("neko={level},neko_core={level},{cat}"))),
+        None => EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(format!("neko={level},neko_core={level}"))),
+    };
 
     let log_path = neko_core::session::paths::log_path();
     if let Some(parent) = log_path.parent() {

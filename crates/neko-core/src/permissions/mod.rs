@@ -5,31 +5,39 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ModeName {
+    /// 全自动：bash / 文件写入 / 编辑均自动放行，无弹框。
     #[default]
-    Build,
+    Auto,
+    /// 编辑模式：文件写入 / 编辑自动放行，bash 禁止。
     Edit,
+    /// 询问模式（只读）：bash / 写入 / 编辑均拒绝。
     Ask,
+    /// 绕过：跳过整个权限引擎，一切放行（含 custom deny 规则）。
+    Bypass,
 }
 
 impl std::str::FromStr for ModeName {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "build" => Ok(Self::Build),
-            "edit"  => Ok(Self::Edit),
-            "ask"   => Ok(Self::Ask),
-            other   => Err(format!("unknown mode: {other}")),
+            "auto"   => Ok(Self::Auto),
+            "edit"   => Ok(Self::Edit),
+            "ask"    => Ok(Self::Ask),
+            "bypass" => Ok(Self::Bypass),
+            // 向后兼容旧配置文件里的 "build"
+            "build"  => Ok(Self::Auto),
+            other    => Err(format!("unknown mode: {other}")),
         }
     }
 }
 
-
 impl std::fmt::Display for ModeName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Build => write!(f, "build"),
-            Self::Edit  => write!(f, "edit"),
-            Self::Ask   => write!(f, "ask"),
+            Self::Auto   => write!(f, "auto"),
+            Self::Edit   => write!(f, "edit"),
+            Self::Ask    => write!(f, "ask"),
+            Self::Bypass => write!(f, "bypass"),
         }
     }
 }
@@ -87,30 +95,28 @@ fn rule_matches(rule: &PermissionRule, req: &AccessCheck<'_>) -> bool {
 
 // ── 模式默认规则 ──────────────────────────────────────────────────────────────
 
-fn build_rules() -> Vec<PermissionRule> {
+/// auto：全自动放行，不弹任何确认框。
+fn auto_rules() -> Vec<PermissionRule> {
     vec![
-        PermissionRule { tool: "bash".into(),       path: None, action: PermissionAction::Ask,   reason: Some("shell execution".into()) },
-        PermissionRule { tool: "write_file".into(),  path: None, action: PermissionAction::Ask,   reason: Some("file write".into()) },
-        PermissionRule { tool: "edit_file".into(),   path: None, action: PermissionAction::Ask,   reason: Some("file edit".into()) },
-        PermissionRule { tool: "*".into(),            path: None, action: PermissionAction::Allow, reason: None },
+        PermissionRule { tool: "*".into(), path: None, action: PermissionAction::Allow, reason: None },
     ]
 }
 
+/// edit：文件写入 / 编辑自动放行；bash 禁止。
 fn edit_rules() -> Vec<PermissionRule> {
     vec![
-        PermissionRule { tool: "bash".into(),       path: None, action: PermissionAction::Deny,  reason: Some("shell disabled in edit mode".into()) },
-        PermissionRule { tool: "write_file".into(),  path: None, action: PermissionAction::Ask,   reason: Some("file write".into()) },
-        PermissionRule { tool: "edit_file".into(),   path: None, action: PermissionAction::Ask,   reason: Some("file edit".into()) },
-        PermissionRule { tool: "*".into(),            path: None, action: PermissionAction::Allow, reason: None },
+        PermissionRule { tool: "bash".into(), path: None, action: PermissionAction::Deny,  reason: Some("shell disabled in edit mode".into()) },
+        PermissionRule { tool: "*".into(),     path: None, action: PermissionAction::Allow, reason: None },
     ]
 }
 
+/// ask：只读模式，bash / 写入 / 编辑全部拒绝。
 fn ask_rules() -> Vec<PermissionRule> {
     let allow = |tool: &str| PermissionRule { tool: tool.into(), path: None, action: PermissionAction::Allow, reason: None };
     vec![
-        PermissionRule { tool: "bash".into(),       path: None, action: PermissionAction::Deny, reason: Some("read-only mode".into()) },
-        PermissionRule { tool: "write_file".into(),  path: None, action: PermissionAction::Deny, reason: Some("read-only mode".into()) },
-        PermissionRule { tool: "edit_file".into(),   path: None, action: PermissionAction::Deny, reason: Some("read-only mode".into()) },
+        PermissionRule { tool: "bash".into(),      path: None, action: PermissionAction::Deny, reason: Some("read-only mode".into()) },
+        PermissionRule { tool: "write_file".into(), path: None, action: PermissionAction::Deny, reason: Some("read-only mode".into()) },
+        PermissionRule { tool: "edit_file".into(),  path: None, action: PermissionAction::Deny, reason: Some("read-only mode".into()) },
         allow("lsp_diagnostics"),
         allow("lsp_refs"),
         allow("read_file"),
@@ -142,7 +148,7 @@ impl DefaultPermissionEngine {
     }
 
     pub fn is_permissions_skipped(&self) -> bool {
-        self.skip_all
+        self.skip_all || self.mode == ModeName::Bypass
     }
 
     pub fn set_mode(&mut self, mode: ModeName) {
@@ -166,7 +172,8 @@ impl DefaultPermissionEngine {
     }
 
     pub fn evaluate(&self, req: &AccessCheck<'_>) -> PermissionAction {
-        if self.skip_all {
+        // bypass 和 skip_all 都跳过一切检查
+        if self.skip_all || self.mode == ModeName::Bypass {
             return PermissionAction::Allow;
         }
         for rule in &self.custom {
@@ -175,9 +182,10 @@ impl DefaultPermissionEngine {
             }
         }
         let mode_rules = match self.mode {
-            ModeName::Build => build_rules(),
-            ModeName::Edit  => edit_rules(),
-            ModeName::Ask   => ask_rules(),
+            ModeName::Auto   => auto_rules(),
+            ModeName::Edit   => edit_rules(),
+            ModeName::Ask    => ask_rules(),
+            ModeName::Bypass => unreachable!(),
         };
         for rule in &mode_rules {
             if rule_matches(rule, req) {

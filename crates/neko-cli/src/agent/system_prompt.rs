@@ -1,10 +1,31 @@
-// 系统提示词构建：注入环境、git 状态、工具与技能清单、Memory
+// 系统提示词构建：注入环境、git 状态、工具与技能清单、Memory、AGENTS.md
 
 use std::path::Path;
 
 use neko_core::{build_memory_prompt, list_memory};
 use neko_core::skills::SkillRegistry;
 use neko_core::tools::ToolRegistry;
+
+/// 从 cwd 开始向上查找 `AGENTS.md`，找到后读取内容。
+/// 最多向上 10 层，遇到 git 根目录即停止（不跨仓库边界）。
+pub fn read_agents_md(cwd: &Path) -> Option<String> {
+    let mut dir = cwd.to_path_buf();
+    for _ in 0..10 {
+        let candidate = dir.join("AGENTS.md");
+        if candidate.is_file() {
+            return std::fs::read_to_string(&candidate).ok();
+        }
+        // 如果当前目录就是 git 根（含 .git/），不再往上
+        if dir.join(".git").exists() {
+            break;
+        }
+        match dir.parent() {
+            Some(p) => dir = p.to_path_buf(),
+            None => break,
+        }
+    }
+    None
+}
 
 /// 构建发送给 LLM 的系统提示词。
 /// 包含：身份、运行环境、cwd、git 状态、工具清单、技能清单、行为准则、Memory。
@@ -39,6 +60,16 @@ pub async fn build_system_prompt(
         s.push_str("# Git\n");
         s.push_str(&git_info);
         s.push('\n');
+    }
+
+    // ── AGENTS.md（项目级 agent 指令，优先级高于内置准则）──
+    if let Some(agents_md) = read_agents_md(cwd) {
+        let trimmed = agents_md.trim();
+        if !trimmed.is_empty() {
+            s.push_str("# Project Instructions (AGENTS.md)\n");
+            s.push_str(trimmed);
+            s.push_str("\n\n");
+        }
     }
 
     // ── 工具清单 ──
