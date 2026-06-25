@@ -75,6 +75,8 @@ fn default_server_args() -> Args {
         add_dir: Vec::new(),
         no_tui: true,
         serve: None,
+        rca: None,
+        sdk: false,
     }
 }
 

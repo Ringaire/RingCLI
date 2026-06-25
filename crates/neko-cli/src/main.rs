@@ -5,7 +5,9 @@ mod connect;
 mod config_watch;
 mod mcp_manager;
 mod print_mode;
+mod rca;
 mod repl;
+mod sdk;
 mod server;
 mod tui;
 
@@ -24,9 +26,20 @@ async fn main() -> Result<()> {
         return repl::cmd::list_sessions().await;
     }
 
-    // --serve: start HTTP+WS server
+    // --serve: start HTTP server
     if let Some(addr) = &args.serve {
         return server::serve(addr).await;
+    }
+
+    // --sdk: stdin/stdout NDJSON mode
+    if args.sdk {
+        return sdk::run(&args).await;
+    }
+
+    // --rca: connect to RCA hub as remote worker
+    if let Some(hub_url) = &args.rca {
+        let mut runtime = bootstrap::bootstrap(&args, None).await?;
+        return crate::rca::connect_and_run(hub_url, &mut runtime).await;
     }
 
     // --continue: resume most recent session in cwd

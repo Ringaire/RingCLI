@@ -70,6 +70,14 @@ pub struct Args {
     /// Start HTTP+WS server (e.g. "127.0.0.1:8765")
     #[arg(long)]
     pub serve: Option<String>,
+
+    /// Connect to RCA hub as remote worker (e.g. "wss://hub.neko.dev")
+    #[arg(long)]
+    pub rca: Option<String>,
+
+    /// SDK mode: communicate via stdin/stdout NDJSON
+    #[arg(long)]
+    pub sdk: bool,
 }
 
 pub fn parse() -> Args {
