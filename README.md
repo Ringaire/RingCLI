@@ -6,9 +6,15 @@
 
 [English](README_EN.md) | 简体中文
 
+(项目处于初始阶段，版本号在正式发布前保持 0.x.x。遵循 [语义化版本 2.0](https://semver.org/lang/zh-CN/))
+
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/Ringaire/NekoCLI)
 [![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-orange.svg)](LICENSE)
+
+一个可扩展的终端 AI 编程助手，支持 20+ LLM 服务商，内置 17 个开发工具
+
+[功能](#功能) • [安装](#安装) • [命令](#命令) • [Provider](#支持的-provider) • [路线图](#路线图)
 
 </div>
 

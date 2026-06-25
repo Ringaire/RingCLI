@@ -6,9 +6,15 @@
 
 English | [简体中文](README.md)
 
+(Project is in early stage, version stays 0.x.x until stable release. Follows [SemVer 2.0](https://semver.org/))
+
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/Ringaire/NekoCLI)
 [![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-orange.svg)](LICENSE)
+
+An extensible terminal AI coding agent, supporting 20+ LLM providers with 17 built-in tools
+
+[Features](#features) • [Install](#install) • [Commands](#commands) • [Providers](#supported-providers) • [Roadmap](#roadmap)
 
 </div>
 
