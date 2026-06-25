@@ -1942,6 +1942,12 @@ fn render_status_bar(state: &AppState, max_w: u16, token_pct: Option<f64>) -> ra
     // 模型
     spans.push(ratatui::text::Span::styled(state.model.clone(), dim));
 
+    // spinner（紧跟模型名，保证始终可见）
+    if state.is_running {
+        let spin = SPINNER[state.spinner_idx % SPINNER.len()];
+        spans.push(ratatui::text::Span::styled(format!(" · {} working", spin), dim));
+    }
+
     // skip-perm
     if state.skip_perms {
         spans.push(ratatui::text::Span::styled(" · skip-perm".to_string(), dim.fg(ERR)));
@@ -1967,10 +1973,6 @@ fn render_status_bar(state: &AppState, max_w: u16, token_pct: Option<f64>) -> ra
     let (_, in_prog_t, _) = tasks::counts(&state.tasks);
     if in_prog_t > 0 {
         right.push_str(&format!(" ◼{}", in_prog_t));
-    }
-    if state.is_running {
-        let spin = SPINNER[state.spinner_idx % SPINNER.len()];
-        right.push_str(&format!(" {} working", spin));
     }
     if !state.queued_messages.is_empty() {
         right.push_str(&format!(" queued({})", state.queued_messages.len()));
