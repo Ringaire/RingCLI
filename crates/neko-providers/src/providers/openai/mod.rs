@@ -174,7 +174,8 @@ impl OpenAiProvider {
             body["tools"] = convert_tools(&req.tools);
         }
         if let Some(t) = req.temperature {
-            body["temperature"] = json!(t);
+            // round 到 2 位小数，避免 f32 精度溢出（某些 provider 限制小数位数）
+            body["temperature"] = json!((t as f64 * 100.0).round() / 100.0);
         }
         if req.max_tokens > 0 {
             body["max_tokens"] = json!(req.max_tokens);
