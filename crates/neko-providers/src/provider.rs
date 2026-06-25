@@ -82,6 +82,8 @@ pub struct ChatRequest {
     pub stop:         Vec<String>,
     pub extended_thinking: bool,
     pub thinking_budget:   Option<u32>,
+    /// reasoning effort 级别（OpenAI o-series / 智谱 GLM-5+）。
+    pub reasoning_effort:  Option<String>,
 }
 
 impl ChatRequest {
@@ -97,6 +99,7 @@ impl ChatRequest {
             stop:           Vec::new(),
             extended_thinking: false,
             thinking_budget:   None,
+            reasoning_effort:  None,
         }
     }
 }

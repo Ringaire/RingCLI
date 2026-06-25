@@ -1,3 +1,17 @@
+pub mod claude_code;
+
+/// 该 provider 的 catalog 条目。
+pub fn catalog_entry() -> crate::catalog::CatalogEntry {
+    crate::catalog::CatalogEntry {
+        name: "Anthropic".into(),
+        kind: crate::catalog::ProviderKind::Anthropic,
+        base_url: Some("https://api.anthropic.com".into()),
+        api_key_env: Some("ANTHROPIC_API_KEY".into()),
+        default_model: Some("claude-sonnet-4-6".into()),
+        extra_body: None,
+    }
+}
+
 use async_trait::async_trait;
 use neko_core::tools::{ContentBlock, Message, MessageRole};
 use reqwest::Client;

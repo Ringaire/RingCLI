@@ -19,10 +19,10 @@ use neko_core::session;
 use neko_core::tools::Message;
 use neko_providers::provider::{DEFAULT_CONTEXT_WINDOW, DEFAULT_THINKING_BUDGET};
 
-use crate::agent::{
+use neko_engine::{
     AgentContext, PermissionDecision, PermissionRequest, TurnResult,
 };
-use crate::agent::tool_preview::extract_tool_preview;
+use neko_engine::agent::tool_preview::extract_tool_preview;
 use crate::args::Args;
 use crate::bootstrap::BootstrappedRuntime;
 use crate::repl::history::History;
@@ -31,6 +31,7 @@ use super::layout::AppLayout;
 use super::widgets::{
     chat::ChatWidget,
     input::InputWidget,
+    mode_picker::ModePickerModal,
     model_picker::ModelPickerModal,
     permission::PermissionModal,
     provider_setup::{ProviderRow, ProviderSetupModal, SetupAction},
@@ -39,7 +40,7 @@ use super::widgets::{
     tasks,
     welcome::render_welcome,
 };
-use super::theme::{SPINNER, MUTED, ERR, WARN};
+use super::theme::{SPINNER, MUTED, ERR, WARN, THINK};
 
 /// 待处理的权限请求：UI 数据 + 回应通道。
 struct PendingPermission {
@@ -72,6 +73,7 @@ struct AppState {
     input:            InputWidget,
     pending:          Option<PendingPermission>,
     model_picker:     Option<ModelPickerModal>,
+    mode_picker:      Option<ModePickerModal>,
     provider_setup:   Option<ProviderSetupModal>,
     signal:           Option<CancellationToken>,
     status_msg:       Option<String>,
@@ -92,12 +94,18 @@ struct AppState {
     think_show:       bool,
     /// thinking token 预算
     think_budget:     u32,
+    /// reasoning effort 级别（low/medium/high/max），None = 不发送
+    effort:           Option<String>,
     /// 运行时用户输入的消息队列（Agent 完成后续按顺序消费）
     queued_messages:  Vec<String>,
     /// Ctrl+C 首次按下后进入 pending 态，再次按下才退出
     exit_pending:     bool,
     /// 当前选中的子 agent 视图（None = 主 agent）
     active_sub_agent: Option<uuid::Uuid>,
+    /// 会话重命名输入状态
+    rename_input:     Option<super::widgets::session_picker::RenameState>,
+    /// 会话操作待确认：删除/fork 需二次确认
+    session_action:   Option<super::widgets::session_picker::SessionAction>,
 }
 
 impl AppState {
@@ -125,6 +133,7 @@ impl AppState {
             input:            InputWidget::new(),
             pending:          None,
             model_picker:     None,
+            mode_picker:      None,
             provider_setup:   None,
             signal:           None,
             status_msg:       None,
@@ -139,9 +148,12 @@ impl AppState {
             think_enabled:    false,
             think_show:       true,
             think_budget:     DEFAULT_THINKING_BUDGET,
+            effort:           None,
             queued_messages:  Vec::new(),
             exit_pending:     false,
             active_sub_agent: None,
+            rename_input:     None,
+            session_action:   None,
         }
     }
 
@@ -311,7 +323,7 @@ async fn run_loop<B: ratatui::backend::Backend>(
     // 避免在事件循环里 await 网络调用导致 UI 冻结。
     let (picker_tx, mut picker_rx) = mpsc::channel::<ModelPickerModal>(1);
     // /connect 向导拉取 /models 列表（走网络）的后台结果回传通道。
-    let (setup_tx, mut setup_rx) = mpsc::channel::<Result<Vec<String>, String>>(1);
+    let (setup_tx, mut setup_rx) = mpsc::channel::<Result<(Vec<String>, Option<String>), String>>(1);
 
     // 初始 prompt
     if let Some(prompt) = args.prompt.clone() {
@@ -375,9 +387,15 @@ async fn run_loop<B: ratatui::backend::Backend>(
                 state.model_picker = Some(picker);
             }
             Some(result) = setup_rx.recv() => {
-                // /connect 向导：模型拉取结果回传
+                // /connect 向导：模型拉取 / OAuth 结果回传
                 match result {
-                    Ok(models) => {
+                    Ok((models, oauth_api_key)) => {
+                        // OAuth 成功：先设置 API key 到 provider_setup
+                        if let Some(key) = oauth_api_key {
+                            if let Some(m) = &mut state.provider_setup {
+                                m.apply_oauth_result(Ok(key));
+                            }
+                        }
                         let action = state.provider_setup.as_mut().map(|m| m.apply_models(models));
                         if let Some(SetupAction::Commit) = action {
                             finish_setup(runtime, &ctx, &mut state).await;
@@ -414,14 +432,22 @@ async fn handle_term_event(
     perm_tx:  &mpsc::Sender<PermissionRequest>,
     done_tx:  &mpsc::Sender<TurnResult>,
     picker_tx: &mpsc::Sender<ModelPickerModal>,
-    setup_tx:  &mpsc::Sender<Result<Vec<String>, String>>,
+    setup_tx:  &mpsc::Sender<Result<(Vec<String>, Option<String>), String>>,
 ) -> Control {
     match ev {
         Event::Paste(text) => {
-            if state.pending.is_none() && state.model_picker.is_none()
-                && state.provider_setup.is_none()
-            {
-                state.input.insert_str(&text);
+            if state.pending.is_none() {
+                if let Some(m) = &mut state.provider_setup {
+                    // provider 向导激活：粘贴到向导输入框（API key 等）
+                    m.insert_str(&text);
+                } else if let Some(picker) = &mut state.model_picker {
+                    // model picker 激活：粘贴到搜索过滤器
+                    picker.append_filter(&text);
+                } else if state.mode_picker.is_none() && state.session_picker.is_none() {
+                    // 正常输入框
+                    let processed = crate::repl::file_complete::process_paste(&text);
+                    state.input.insert_str(&processed);
+                }
             }
             Control::Continue
         }
@@ -436,12 +462,20 @@ async fn handle_term_event(
                 return handle_provider_setup_key(ke, runtime, ctx, state, setup_tx).await;
             }
             // 会话选择器优先处理按键
-            if state.session_picker.is_some() {
+            if state.session_picker.is_some() && state.rename_input.is_none() {
                 return handle_session_picker_key(ke, runtime, ctx, state).await;
+            }
+            // 重命名输入状态
+            if state.rename_input.is_some() {
+                return handle_rename_key(ke, state).await;
             }
             // 模型选择器优先处理按键
             if state.model_picker.is_some() {
                 return handle_model_picker_key(ke, runtime, ctx, state).await;
+            }
+            // 模式选择器优先处理按键
+            if state.mode_picker.is_some() {
+                return handle_mode_picker_key(ke, runtime, state).await;
             }
             handle_key(ke, runtime, ctx, state, history, perm_tx, done_tx, picker_tx).await
         }
@@ -506,7 +540,22 @@ async fn handle_model_picker_key(
     ctx:     &Arc<TokioMutex<AgentContext>>,
     state:   &mut AppState,
 ) -> Control {
+    let ctrl = ke.modifiers.contains(KeyModifiers::CONTROL);
     match ke.code {
+        // 搜索：字符输入追加到 filter
+        KeyCode::Char(c) if !ctrl => {
+            if let Some(picker) = &mut state.model_picker {
+                picker.push_filter_char(c);
+            }
+        }
+        // 搜索：Backspace 删除 filter 最后一个字符
+        KeyCode::Backspace => {
+            if let Some(picker) = &mut state.model_picker {
+                if !picker.filter().is_empty() {
+                    picker.pop_filter_char();
+                }
+            }
+        }
         KeyCode::Up => {
             if let Some(picker) = &mut state.model_picker {
                 picker.move_up();
@@ -517,16 +566,68 @@ async fn handle_model_picker_key(
                 picker.move_down();
             }
         }
+        KeyCode::PageUp => {
+            if let Some(picker) = &mut state.model_picker {
+                picker.page_up();
+            }
+        }
+        KeyCode::PageDown => {
+            if let Some(picker) = &mut state.model_picker {
+                picker.page_down();
+            }
+        }
+        KeyCode::Home => {
+            if let Some(picker) = &mut state.model_picker {
+                picker.move_home();
+            }
+        }
+        KeyCode::End => {
+            if let Some(picker) = &mut state.model_picker {
+                picker.move_end();
+            }
+        }
         KeyCode::Enter => {
             if let Some(picker) = state.model_picker.take() {
-                if let Some(model_id) = picker.selected_id() {
-                    let model_ref = format!("{}/{}", picker.provider, model_id);
+                if let Some(model_ref) = picker.selected_ref() {
                     switch_model(runtime, ctx, state, model_ref).await;
                 }
             }
         }
         KeyCode::Esc => {
             state.model_picker = None;
+        }
+        _ => {}
+    }
+    Control::Continue
+}
+
+/// 模式选择器按键处理。
+async fn handle_mode_picker_key(
+    ke:      KeyEvent,
+    runtime: &mut BootstrappedRuntime,
+    state:   &mut AppState,
+) -> Control {
+    match ke.code {
+        KeyCode::Up => {
+            if let Some(picker) = &mut state.mode_picker {
+                picker.move_up();
+            }
+        }
+        KeyCode::Down => {
+            if let Some(picker) = &mut state.mode_picker {
+                picker.move_down();
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(picker) = state.mode_picker.take() {
+                let mode = picker.selected();
+                runtime.mode = mode;
+                runtime.permissions.lock().await.set_mode(mode);
+                state.mode = mode.to_string();
+            }
+        }
+        KeyCode::Esc => {
+            state.mode_picker = None;
         }
         _ => {}
     }
@@ -540,26 +641,105 @@ async fn handle_session_picker_key(
     ctx:     &Arc<TokioMutex<AgentContext>>,
     state:   &mut AppState,
 ) -> Control {
+    let ctrl = ke.modifiers.contains(KeyModifiers::CONTROL);
     match ke.code {
         KeyCode::Up => {
             if let Some(picker) = &mut state.session_picker {
                 picker.move_up();
             }
+            // 移动时取消待确认操作
+            state.session_action = None;
         }
         KeyCode::Down => {
             if let Some(picker) = &mut state.session_picker {
                 picker.move_down();
             }
+            // 移动时取消待确认操作
+            state.session_action = None;
         }
         KeyCode::Enter => {
             if let Some(picker) = state.session_picker.take() {
+                state.session_action = None;
                 if let Some(id) = picker.selected_id() {
                     resume_session_tui(runtime, ctx, state, id).await;
                 }
             }
         }
+        // Ctrl+D: 删除（二次确认）
+        KeyCode::Char('d') if ctrl => {
+            if let Some(super::widgets::session_picker::SessionAction::Delete { id, .. }) = state.session_action.take() {
+                // 已确认 → 执行删除
+                delete_session_tui(state, id).await;
+            } else if let Some(picker) = &state.session_picker {
+                if let Some(id) = picker.selected_id() {
+                    let title = picker.selected_title().unwrap_or_default().to_string();
+                    state.session_action = Some(super::widgets::session_picker::SessionAction::Delete { id, title });
+                }
+            }
+        }
+        // Ctrl+R: 重命名
+        KeyCode::Char('r') if ctrl => {
+            state.session_action = None;
+            if let Some(picker) = &state.session_picker {
+                if let Some(id) = picker.selected_id() {
+                    let name = picker.selected_title().unwrap_or_default().to_string();
+                    rename_session_tui(state, id, &name).await;
+                }
+            }
+        }
+        // Ctrl+F: Fork（二次确认）
+        KeyCode::Char('f') if ctrl => {
+            if let Some(super::widgets::session_picker::SessionAction::Fork { id }) = state.session_action.take() {
+                // 已确认 → 执行 fork
+                state.session_picker = None;
+                fork_session_tui(runtime, ctx, state, id).await;
+            } else if let Some(picker) = &state.session_picker {
+                if let Some(id) = picker.selected_id() {
+                    state.session_action = Some(super::widgets::session_picker::SessionAction::Fork { id });
+                }
+            }
+        }
         KeyCode::Esc => {
-            state.session_picker = None;
+            if state.session_action.is_some() {
+                // 有待确认操作时 Esc 只取消操作，不关闭 picker
+                state.session_action = None;
+            } else {
+                state.session_picker = None;
+            }
+        }
+        _ => {}
+    }
+    Control::Continue
+}
+
+/// 重命名输入处理：Enter 确认 / Esc 取消 / 字符输入
+async fn handle_rename_key(ke: KeyEvent, state: &mut AppState) -> Control {
+    let ctrl = ke.modifiers.contains(KeyModifiers::CONTROL);
+    match ke.code {
+        KeyCode::Enter => {
+            if let Some(rs) = state.rename_input.take() {
+                let new_title = rs.current_title.trim().to_string();
+                if !new_title.is_empty() {
+                    let id = rs.session_id;
+                    let _ = neko_core::session::rename_session(id, new_title.clone()).await;
+                    state.chat.add_system(format!("renamed session to: {new_title}"));
+                    // 刷新 picker 列表
+                    refresh_session_picker(state).await;
+                }
+            }
+        }
+        KeyCode::Esc => {
+            state.rename_input = None;
+        }
+        KeyCode::Backspace => {
+            if let Some(rs) = &mut state.rename_input {
+                rs.current_title.pop();
+            }
+        }
+        KeyCode::Char(c) if !ctrl => {
+            if let Some(rs) = &mut state.rename_input {
+                rs.current_title.push(c);
+            }
         }
         _ => {}
     }
@@ -573,7 +753,7 @@ async fn handle_provider_setup_key(
     runtime:  &mut BootstrappedRuntime,
     ctx:      &Arc<TokioMutex<AgentContext>>,
     state:    &mut AppState,
-    setup_tx: &mpsc::Sender<Result<Vec<String>, String>>,
+    setup_tx: &mpsc::Sender<Result<(Vec<String>, Option<String>), String>>,
 ) -> Control {
     let ctrl = ke.modifiers.contains(KeyModifiers::CONTROL);
     let action = match ke.code {
@@ -594,6 +774,8 @@ async fn handle_provider_setup_key(
         SetupAction::Stay   => {}
         SetupAction::Cancel => { state.provider_setup = None; }
         SetupAction::Fetch  => spawn_fetch_models(state, runtime, setup_tx),
+        SetupAction::OAuthBrowser => spawn_oauth(state, runtime, setup_tx, true),
+        SetupAction::OAuthDevice  => spawn_oauth(state, runtime, setup_tx, false),
         SetupAction::Commit => finish_setup(runtime, ctx, state).await,
     }
     Control::Continue
@@ -603,7 +785,7 @@ async fn handle_provider_setup_key(
 fn spawn_fetch_models(
     state:    &AppState,
     runtime:  &BootstrappedRuntime,
-    setup_tx: &mpsc::Sender<Result<Vec<String>, String>>,
+    setup_tx: &mpsc::Sender<Result<(Vec<String>, Option<String>), String>>,
 ) {
     let Some(m) = &state.provider_setup else { return; };
     let kind          = m.kind();
@@ -619,12 +801,80 @@ fn spawn_fetch_models(
             proxy.as_deref(), &kind, &id, api_key, base_url, default_model,
         ) {
             Some(p) => match p.list_models().await {
-                Ok(models) => Ok(models.into_iter().map(|mi| mi.id).collect()),
+                Ok(models) => {
+                    let ids: Vec<String> = models.into_iter().map(|mi| mi.id).collect();
+                    Ok((ids, None))
+                }
                 Err(e)     => Err(format!("{e}")),
             },
             None => Err("could not build provider for model fetch".to_string()),
         };
         let _ = tx.send(result).await;
+    });
+}
+
+/// 后台执行 ChatGPT OAuth2 登录，成功后用换来的 API key 拉取模型列表。
+fn spawn_oauth(
+    state:    &AppState,
+    runtime:  &BootstrappedRuntime,
+    setup_tx: &mpsc::Sender<Result<(Vec<String>, Option<String>), String>>,
+    browser:  bool,
+) {
+    let proxy = runtime.config.proxy.clone();
+    let tx    = setup_tx.clone();
+
+    tokio::spawn(async move {
+        let client = neko_providers::provider::build_http_client(
+            proxy.as_deref(),
+            neko_providers::provider::DEFAULT_CONNECT_TIMEOUT_SECS,
+        );
+
+        // 1. OAuth2 登录
+        let auth_result = if browser {
+            neko_providers::providers::openai::oauth::login_browser(&client).await
+        } else {
+            neko_providers::providers::openai::oauth::login_device(&client).await
+        };
+
+        let auth_data = match auth_result {
+            Ok(d) => d,
+            Err(e) => {
+                let _ = tx.send(Err(e.to_string())).await;
+                return;
+            }
+        };
+
+        // 2. 持久化 auth data
+        let _ = neko_providers::providers::openai::oauth::save_auth(&auth_data).await;
+
+        // 3. 获取 API key
+        let api_key = match auth_data.api_key() {
+            Some(k) => k.to_string(),
+            None => {
+                let _ = tx.send(Err("OAuth succeeded but no API key obtained".into())).await;
+                return;
+            }
+        };
+
+        // 4. 用 API key 构造 probe provider 拉取模型
+        let probe = neko_providers::build_probe_provider(
+            proxy.as_deref(),
+            &neko_providers::catalog::ProviderKind::OpenAi,
+            "openai",
+            api_key.clone(),
+            Some("https://api.openai.com/v1".to_string()),
+            Some("gpt-4o".to_string()),
+        );
+
+        let models: Vec<String> = match probe {
+            Some(p) => p.list_models().await
+                .map(|ms| ms.into_iter().map(|m| m.id).collect())
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+
+        // 5. 回传模型 + API key
+        let _ = tx.send(Ok((models, Some(api_key)))).await;
     });
 }
 
@@ -764,19 +1014,38 @@ async fn handle_key(
                 state.input.clear();
             }
         }
-        KeyCode::Char('d') if ctrl => {
-            if state.input.is_empty() && !state.is_running {
-                return Control::Quit;
-            }
-        }
         KeyCode::Char('o') if ctrl => {
             state.think_show = !state.think_show;
             let msg = if state.think_show { "thinking: show" } else { "thinking: hide" };
             state.chat.add_system(msg);
         }
         KeyCode::Char('t') if ctrl => {
+            // 循环 thinking budget: off → 2k → 4k → 8k → 16k → 32k
+            state.think_enabled = !state.think_enabled;
+            if state.think_enabled {
+                state.think_budget = match state.think_budget {
+                    b if b <= 2048 => 4096,
+                    b if b <= 4096 => 8192,
+                    b if b <= 8192 => 16384,
+                    _              => 2048,
+                };
+            }
+            let msg = if state.think_enabled {
+                format!("thinking: ON ({} tokens)", state.think_budget)
+            } else {
+                "thinking: OFF".to_string()
+            };
+            state.chat.add_system(&msg);
+        }
+        KeyCode::Char('x') if ctrl => {
+            // 更多选项：任务面板 + 状态信息
             state.refresh_tasks();
             state.show_tasks = !state.show_tasks;
+            if state.show_tasks {
+                state.chat.add_system("tasks: show");
+            } else {
+                state.chat.add_system("tasks: hide");
+            }
         }
         // 某些终端/键盘把 Backspace 编码为 BS(0x08)，crossterm 解码为 Ctrl+H。
         KeyCode::Char('h') if ctrl => {
@@ -789,12 +1058,12 @@ async fn handle_key(
                 let val = state.suggestions[idx].value.clone();
                 state.input.set(format!("{} ", val));
             } else {
-                // 循环切换权限模式 build → edit → ask
                 let next = match runtime.mode {
-                    neko_core::ModeName::Ask    => neko_core::ModeName::Edit,
-                    neko_core::ModeName::Edit   => neko_core::ModeName::Auto,
-                    neko_core::ModeName::Auto   => neko_core::ModeName::Bypass,
-                    neko_core::ModeName::Bypass => neko_core::ModeName::Ask,
+                    neko_core::ModeName::Ask   => neko_core::ModeName::Edit,
+                    neko_core::ModeName::Edit  => neko_core::ModeName::Plan,
+                    neko_core::ModeName::Plan  => neko_core::ModeName::Build,
+                    neko_core::ModeName::Build => neko_core::ModeName::Agent,
+                    neko_core::ModeName::Agent => neko_core::ModeName::Ask,
                 };
                 runtime.mode = next;
                 runtime.permissions.lock().await.set_mode(next);
@@ -802,7 +1071,10 @@ async fn handle_key(
             }
         }
         KeyCode::Esc => {
-            if state.is_running {
+            if state.active_sub_agent.is_some() {
+                // 从子 agent 视图切回主视图
+                state.active_sub_agent = None;
+            } else if state.is_running {
                 if let Some(sig) = &state.signal {
                     sig.cancel();
                 }
@@ -823,6 +1095,11 @@ async fn handle_key(
                     state.suggestions[idx].value != state.input.value.trim()
                 };
 
+            // 已有完整命令（含空格）时清除建议，避免二次回车
+            if !state.suggestions.is_empty() && state.input.value.contains(char::is_whitespace) {
+                state.suggestions.clear();
+            }
+
             if state.is_running {
                 // 运行时压入队列，Agent 完成后自动消费
                 let text = state.input.take();
@@ -833,7 +1110,19 @@ async fn handle_key(
             } else if accept_suggestion {
                 let idx = state.suggestion_idx.min(state.suggestions.len() - 1);
                 let val = state.suggestions[idx].value.clone();
-                state.input.set(format!("{} ", val));
+                state.suggestions.clear();
+                let text = format!("{} ", val);
+                state.input.clear();
+                history.push(&text).await;
+                history.reset_cursor();
+                match handle_command(&text, runtime, ctx, state, picker_tx).await {
+                    CmdResult::NotCommand => {}
+                    CmdResult::Send(prompt) => {
+                        start_turn(runtime, ctx, state, perm_tx, done_tx, prompt).await;
+                    }
+                    CmdResult::Handled => {}
+                    CmdResult::Quit => return Control::Quit,
+                }
             } else if !state.input.is_empty() {
                 let text = state.input.take();
                 history.push(&text).await;
@@ -888,7 +1177,8 @@ async fn handle_key(
             if !state.suggestions.is_empty() {
                 let n = state.suggestions.len();
                 state.suggestion_idx = (state.suggestion_idx + 1) % n;
-            } else if state.is_running {
+            } else if state.is_running || state.active_sub_agent.is_some() {
+                // 运行中或已在子 agent 视图中：循环切换子 agent 视图
                 let ids = sub_agent_ids(&state.chat);
                 if !ids.is_empty() {
                     let next = match state.active_sub_agent {
@@ -902,8 +1192,6 @@ async fn handle_key(
                         }
                     };
                     state.active_sub_agent = next;
-                    state.status_msg = next.map(|id| format!("sub-agent {}", &id.to_string()[..8]))
-                        .or_else(|| Some("main agent".into()));
                 }
             } else if let Some(next) = history.next() {
                 state.input.set(next);
@@ -967,6 +1255,10 @@ async fn handle_command(
             state.chat.add_system(format!("mode switched to {}", mode));
             CmdResult::Handled
         }
+        CommandOutcome::OpenModePicker => {
+            state.mode_picker = Some(ModePickerModal::new(runtime.mode));
+            CmdResult::Handled
+        }
         CommandOutcome::SwitchModel(model_ref) => {
             switch_model(runtime, ctx, state, model_ref).await;
             CmdResult::Handled
@@ -981,56 +1273,129 @@ async fn handle_command(
         }
         CommandOutcome::OpenModelPicker => {
             use super::widgets::model_picker::ModelEntry;
-            let Some(provider) = runtime.provider.clone() else {
-                state.chat.add_system("No provider configured — run /connect first.");
-                return CmdResult::Handled;
-            };
-            let provider_id = provider.id().to_string();
-            let active      = state.model.clone();
 
-            // 1. 有缓存（config.models[provider]）→ 立即展示，不等网络；后台静默刷新磁盘缓存。
-            if let Some(ids) = runtime.config.models.get(&provider_id).filter(|v| !v.is_empty()) {
-                let entries = ids.iter()
-                    .map(|id| ModelEntry { id: id.clone(), display_name: id.clone() })
-                    .collect();
-                state.model_picker = Some(ModelPickerModal::new(provider_id.clone(), entries, active));
-                let pid = provider_id;
+            let active_provider = runtime.provider.as_ref().map(|p| p.id().to_string());
+            let active_model = state.model.clone();
+
+            // 收集所有已注册 provider 的缓存模型，跨 provider 分组展示。
+            let mut entries = Vec::new();
+            for p in runtime.provider_registry.list() {
+                let pid = p.id().to_string();
+                let pname = p.display_name().to_string();
+                if let Some(ids) = runtime.config.models.get(&pid) {
+                    for id in ids {
+                        entries.push(ModelEntry {
+                            id:            id.clone(),
+                            display_name:  String::new(),
+                            provider_id:   pid.clone(),
+                            provider_name: pname.clone(),
+                        });
+                    }
+                }
+            }
+
+            if entries.is_empty() {
+                // 无任何缓存 → 后台拉取当前 provider 模型，拉完回传 picker。
+                let Some(provider) = runtime.provider.clone() else {
+                    state.chat.add_system("No provider configured — run /connect first.");
+                    return CmdResult::Handled;
+                };
+                let pid = provider.id().to_string();
+                let pname = provider.display_name().to_string();
+                let tx = picker_tx.clone();
+                state.status_msg = Some("loading models…".into());
                 tokio::spawn(async move {
-                    let ids: Vec<String> = provider.list_models().await
-                        .unwrap_or_default().into_iter().map(|m| m.id).collect();
+                    let models = provider.list_models().await.unwrap_or_default();
+                    let ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
                     crate::connect::cache_models(&pid, &ids).await;
+                    let entries: Vec<ModelEntry> = models
+                        .into_iter()
+                        .map(|m| ModelEntry {
+                            id:            m.id,
+                            display_name:  m.display_name,
+                            provider_id:   pid.clone(),
+                            provider_name: pname.clone(),
+                        })
+                        .collect();
+                    if !entries.is_empty() {
+                        let _ = tx
+                            .send(ModelPickerModal::new(entries, pid, active_model))
+                            .await;
+                    }
                 });
                 return CmdResult::Handled;
             }
 
-            // 2. 无缓存 → 后台拉取（loading…），拉完回传 picker 并存盘，下次即时。
-            let tx  = picker_tx.clone();
-            let pid = provider_id;
-            state.status_msg = Some("loading models…".into());
-            tokio::spawn(async move {
-                let models = provider.list_models().await.unwrap_or_default();
-                let ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
-                crate::connect::cache_models(&pid, &ids).await;
-                let entries = models
-                    .into_iter()
-                    .map(|m| ModelEntry { id: m.id, display_name: m.display_name })
-                    .collect();
-                let _ = tx.send(ModelPickerModal::new(pid, entries, active)).await;
-            });
+            state.model_picker = Some(ModelPickerModal::new(
+                entries,
+                active_provider.unwrap_or_default(),
+                active_model,
+            ));
+
+            // 后台静默刷新当前 provider 的磁盘缓存。
+            if let Some(provider) = runtime.provider.clone() {
+                let pid = provider.id().to_string();
+                tokio::spawn(async move {
+                    let ids: Vec<String> = provider
+                        .list_models()
+                        .await
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|m| m.id)
+                        .collect();
+                    crate::connect::cache_models(&pid, &ids).await;
+                });
+            }
             CmdResult::Handled
         }
-        CommandOutcome::SwitchThinking { enabled, budget, show } => {
+        CommandOutcome::SwitchThinking { enabled, budget } => {
             state.think_enabled = enabled;
             if let Some(b) = budget { state.think_budget = b; }
-            if let Some(s) = show { state.think_show = s; }
-            let show_str = if state.think_show { "show" } else { "hide" };
             if state.think_enabled {
                 state.chat.add_system(format!(
-                    "thinking ON (budget: {} tokens, display: {})", state.think_budget, show_str
+                    "thinking ON (budget: {} tokens)", state.think_budget
                 ));
             } else {
                 state.chat.add_system("thinking OFF");
             }
+            CmdResult::Handled
+        }
+        CommandOutcome::ToggleThinkingDisplay => {
+            state.think_show = !state.think_show;
+            state.chat.add_system(format!(
+                "reasoning display: {}", if state.think_show { "expanded" } else { "folded" }
+            ));
+            CmdResult::Handled
+        }
+        CommandOutcome::SetEffort(level) => {
+            if level == "off" {
+                state.effort = None;
+                state.chat.add_system("effort: off (model default)");
+            } else {
+                state.effort = Some(level.clone());
+                state.chat.add_system(format!("effort: {level}"));
+            }
+            CmdResult::Handled
+        }
+        CommandOutcome::NewSession => {
+            let new_session = neko_core::session::create_session(
+                runtime.session.meta.cwd.clone(),
+                Some(runtime.model.clone()),
+            ).await;
+            let messages = {
+                let mut guard = ctx.lock().await;
+                let new_ctx = neko_engine::AgentContext::from_session(
+                    &new_session,
+                    runtime.model.clone(),
+                    Some(runtime.system_prompt.clone()),
+                );
+                *guard = new_ctx;
+                guard.messages.clone()
+            };
+            runtime.session = new_session;
+            state.chat = ChatWidget::new();
+            state.load_history_messages(&messages);
+            state.chat.add_system("Started new conversation");
             CmdResult::Handled
         }
         CommandOutcome::Clear => {
@@ -1045,7 +1410,33 @@ async fn handle_command(
             resume_session_tui(runtime, ctx, state, id).await;
             CmdResult::Handled
         }
+        CommandOutcome::OpenSessionPicker => {
+            let sessions = neko_core::session::list_sessions().await;
+            let entries: Vec<SessionEntry> = sessions.into_iter().map(|s| {
+                let when = chrono::DateTime::from_timestamp_millis(s.updated_at)
+                    .map(|d: chrono::DateTime<chrono::Utc>| d.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_else(|| "-".to_string());
+                SessionEntry {
+                    id: s.id,
+                    title: s.title.unwrap_or_default(),
+                    message_count: s.message_count,
+                    updated_at: when,
+                }
+            }).collect();
+            state.session_picker = Some(SessionPickerModal::new(entries));
+            CmdResult::Handled
+        }
         CommandOutcome::Quit => CmdResult::Quit,
+        CommandOutcome::EnterPlan(desc) => {
+            let prompt = format!(
+                "The user wants to create a plan. Task: {}\n\n\
+                 Use `enter_plan_mode` to switch to plan mode, research, \
+                 write the plan, then call `exit_plan_mode` to submit.",
+                if desc.is_empty() { "architecture / task planning" } else { &desc }
+            );
+            state.chat.add_system("entering plan mode…");
+            CmdResult::Send(prompt)
+        }
         CommandOutcome::InitAgentsMd => {
             let agents_path = runtime.cwd.join("AGENTS.md");
             if agents_path.exists() {
@@ -1061,21 +1452,7 @@ async fn handle_command(
         }
         CommandOutcome::Handled => {
             let trimmed = text.trim();
-            if trimmed == "/sessions" || trimmed == "/ls" || trimmed == "/resume" {
-                let sessions = neko_core::session::list_sessions().await;
-                let entries: Vec<SessionEntry> = sessions.into_iter().map(|s| {
-                    let when = chrono::DateTime::from_timestamp_millis(s.updated_at)
-                        .map(|d: chrono::DateTime<chrono::Utc>| d.format("%Y-%m-%d %H:%M").to_string())
-                        .unwrap_or_else(|| "-".to_string());
-                    SessionEntry {
-                        id: s.id,
-                        title: s.title.unwrap_or_default(),
-                        message_count: s.message_count,
-                        updated_at: when,
-                    }
-                }).collect();
-                state.session_picker = Some(SessionPickerModal::new(entries));
-            } else if let Some(rest) = trimmed.strip_prefix("/memory").or_else(|| trimmed.strip_prefix("/mem")) {
+            if let Some(rest) = trimmed.strip_prefix("/memory").or_else(|| trimmed.strip_prefix("/mem")) {
                 let rest = rest.trim();
                 let entries = if let Some(q) = rest.strip_prefix("search").map(|s| s.trim()).filter(|s| !s.is_empty()) {
                     neko_core::search_memory(q).await
@@ -1170,8 +1547,20 @@ async fn start_turn(
     state.status_msg = None;
     state.turn_start_ms = Some(chrono::Utc::now().timestamp_millis());
 
-    let mut executor = crate::agent::orchestrator::build_executor(runtime, provider, Some(perm_tx.clone()));
+    let mut executor = neko_engine::agent::orchestrator::build_executor(
+        runtime.tools.clone(),
+        runtime.permissions.clone(),
+        runtime.bus.clone(),
+        runtime.catalog.clone(),
+        runtime.model.clone(),
+        runtime.session.meta.id,
+        runtime.cwd.clone(),
+        neko_providers::provider::DEFAULT_MAX_OUTPUT_TOKENS as u64,
+        provider,
+        Some(perm_tx.clone()),
+    );
     executor.thinking_budget = if state.think_enabled { Some(state.think_budget) } else { None };
+    executor.reasoning_effort = state.effort.clone();
 
     let ctx2 = ctx.clone();
     let done2 = done_tx.clone();
@@ -1216,7 +1605,7 @@ async fn resume_session_tui(
         Some(s) => {
             let messages = {
                 let mut guard = ctx.lock().await;
-                let new_ctx = crate::agent::AgentContext::from_session(
+                let new_ctx = neko_engine::AgentContext::from_session(
                     &s,
                     runtime.model.clone(),
                     Some(runtime.system_prompt.clone()),
@@ -1237,19 +1626,112 @@ async fn resume_session_tui(
     }
 }
 
+/// 删除会话：从列表移除并删除文件。
+async fn delete_session_tui(state: &mut AppState, id: uuid::Uuid) {
+    if let Err(e) = neko_core::session::delete_session(id).await {
+        state.chat.add_system(format!("delete failed: {e}"));
+        return;
+    }
+    // 从 picker 列表移除
+    let label = if let Some(picker) = &mut state.session_picker {
+        let title = picker.selected_title().unwrap_or_default().to_string();
+        picker.remove_selected();
+        title
+    } else {
+        id.to_string()
+    };
+    state.chat.add_system(format!("deleted: {label}"));
+}
+
+/// 重命名会话。
+async fn rename_session_tui(state: &mut AppState, id: uuid::Uuid, old_name: &str) {
+    // 从列表中取当前 title 作为默认值
+    let default = if old_name.is_empty() { id.to_string() } else { old_name.to_string() };
+    state.rename_input = Some(super::widgets::session_picker::RenameState {
+        session_id: id,
+        current_title: default,
+    });
+}
+
+/// Fork 会话：复制到新会话并立即切换。
+async fn fork_session_tui(
+    runtime: &mut BootstrappedRuntime,
+    ctx:     &Arc<TokioMutex<AgentContext>>,
+    state:   &mut AppState,
+    id:      uuid::Uuid,
+) {
+    match neko_core::session::fork_session(id).await {
+        Ok(new_session) => {
+            let new_id = new_session.meta.id;
+            // 立即切换到新会话
+            let messages = {
+                let mut guard = ctx.lock().await;
+                let new_ctx = neko_engine::AgentContext::from_session(
+                    &new_session,
+                    runtime.model.clone(),
+                    Some(runtime.system_prompt.clone()),
+                );
+                *guard = new_ctx;
+                guard.messages.clone()
+            };
+            runtime.session = new_session;
+            state.chat = ChatWidget::new();
+            state.load_history_messages(&messages);
+            state.chat.add_system(format!(
+                "forked {} → {} ({} messages)",
+                id, new_id, messages.len()
+            ));
+            // 刷新 picker 列表
+            refresh_session_picker(state).await;
+        }
+        Err(e) => {
+            state.chat.add_system(format!("fork failed: {e}"));
+        }
+    }
+}
+
+/// 刷新会话 picker 列表。
+async fn refresh_session_picker(state: &mut AppState) {
+    use super::widgets::session_picker::SessionEntry;
+    let sessions = neko_core::session::list_sessions().await;
+    let entries: Vec<SessionEntry> = sessions.into_iter().map(|s| {
+        let when = chrono::DateTime::from_timestamp_millis(s.updated_at)
+            .map(|d: chrono::DateTime<chrono::Utc>| d.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "-".to_string());
+        SessionEntry {
+            id: s.id,
+            title: s.title.unwrap_or_default(),
+            message_count: s.message_count,
+            updated_at: when,
+        }
+    }).collect();
+    state.session_picker = Some(super::widgets::session_picker::SessionPickerModal::new(entries));
+}
+
 fn draw<B: ratatui::backend::Backend>(term: &mut Terminal<B>, state: &mut AppState) -> Result<()> {
     term.draw(|frame| {
         let area = frame.area();
         let input_lines = state.input.visual_line_count(area.width);
         let base = AppLayout::compute(area, input_lines);
 
-        // 哪个下拉菜单处于激活态 + 其高度（统一渲染在输入框正下方）。
+        // ── 确定 footer zone 四态（审核 > 选择 > 通知 > 提醒）──────────────────
         let show_suggestions = !state.suggestions.is_empty() && state.pending.is_none()
             && state.session_picker.is_none() && state.model_picker.is_none()
-            && state.provider_setup.is_none();
-        let menu_h: u16 = if let Some(p) = &state.pending {
+            && state.mode_picker.is_none() && state.provider_setup.is_none();
+
+        let token_pct = if state.show_token_count && state.tokens > 0 && state.context_window > 0 {
+            Some(state.tokens as f64 / state.context_window as f64 * 100.0)
+        } else {
+            None
+        };
+        let has_notification = state.status_msg.is_some()
+            || token_pct.map_or(false, |p| p >= 70.0);
+
+        let zone_h: u16 = if let Some(p) = &state.pending {
             p.modal.height()
         } else if let Some(pk) = &state.model_picker {
+            pk.height()
+        } else if let Some(pk) = &state.mode_picker {
             pk.height()
         } else if let Some(pk) = &state.session_picker {
             pk.height()
@@ -1258,29 +1740,30 @@ fn draw<B: ratatui::backend::Backend>(term: &mut Terminal<B>, state: &mut AppSta
         } else if show_suggestions {
             suggestions::height(state.suggestions.len())
         } else {
-            0
+            1 // 通知 / 提醒：固定 1 行
         };
 
-        // 菜单激活时在输入框正下方碾出一段高度（chat 让位），保证菜单完整可见、`❯` 不被裁。
-        let (chat_area, input_area, footer_area, menu_area) = if menu_h == 0 {
-            (base.chat, base.input, base.footer, None)
-        } else {
-            use ratatui::layout::{Constraint, Direction, Layout};
-            let input_h  = base.input.height;
-            let footer_h = base.footer.height.max(1);
-            let avail = area.height.saturating_sub(input_h + footer_h + 1).max(1);
-            let mh = menu_h.min(avail);
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(1),          // chat（收缩让位）
-                    Constraint::Length(input_h), // input
-                    Constraint::Length(mh),      // 菜单（输入框正下方）
-                    Constraint::Length(footer_h),// footer
-                ])
-                .split(area);
-            (chunks[0], chunks[1], chunks[3], Some(chunks[2]))
-        };
+        // ── 布局：chat / input / footer_zone / status_bar ─────────────────────
+        let input_h = base.input.height;
+        let status_h = 1u16;
+        let avail = area.height.saturating_sub(input_h + status_h + 1).max(1);
+        let zh = zone_h.min(avail);
+
+        use ratatui::layout::{Constraint, Direction, Layout};
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(1),           // chat（收缩让位）
+                Constraint::Length(input_h),  // input
+                Constraint::Length(zh),       // footer zone（四态切换）
+                Constraint::Length(status_h), // status bar（固定）
+            ])
+            .split(area);
+
+        let chat_area = chunks[0];
+        let input_area = chunks[1];
+        let zone_area = chunks[2];
+        let status_area = chunks[3];
 
         // chat area
         let show_welcome = !state.chat.has_conversation();
@@ -1299,113 +1782,189 @@ fn draw<B: ratatui::backend::Backend>(term: &mut Terminal<B>, state: &mut AppSta
         let arg_hint = crate::repl::commands::argument_hint(&state.input.value);
         frame.render_widget(state.input.render(&state.mode, &ghost, arg_hint, input_area.width), input_area);
 
-        // footer（状态栏，输入框下方紧凑行）
-        {
-            use unicode_width::UnicodeWidthStr;
-
-            let dim = ratatui::style::Style::default().fg(MUTED);
-            let bold_dim = dim.add_modifier(ratatui::style::Modifier::BOLD);
-            let mcolor = super::theme::mode_color(&state.mode);
-            let max_w = footer_area.width as usize;
-
-            let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
-
-            let mode_s = format!("⏵⏵ {}", state.mode);
-            spans.push(ratatui::text::Span::styled(mode_s, bold_dim.fg(mcolor)));
-            spans.push(ratatui::text::Span::styled(" · ".to_string(), dim));
-
-            spans.push(ratatui::text::Span::styled(state.model.clone(), dim));
-
-            if state.is_running {
-                let spin = SPINNER[state.spinner_idx % SPINNER.len()];
-                spans.push(ratatui::text::Span::styled(format!(" · {} working", spin), dim));
-            }
-            if state.skip_perms {
-                spans.push(ratatui::text::Span::styled(" · skip-perm".to_string(), dim.fg(ERR)));
-            }
-            if let Some(ref msg) = state.status_msg {
-                spans.push(ratatui::text::Span::styled(format!(" · {}", msg), dim));
-            }
-
-            if state.show_token_count && state.tokens > 0 && state.context_window > 0 {
-                let pct = state.tokens as f64 / state.context_window as f64 * 100.0;
-                let tc = if pct >= 85.0 { ERR }
-                    else if pct >= 70.0 { WARN }
-                    else { MUTED };
-                let tokens_k = state.tokens as f64 / 1000.0;
-                let token_str = if tokens_k >= 1000.0 {
-                    format!("{:.1}M", tokens_k / 1000.0)
-                } else {
-                    format!("{:.0}k", tokens_k)
-                };
-                spans.push(ratatui::text::Span::styled(
-                    format!(" · {}({:.0}%)", token_str, pct), dim.fg(tc)));
-            }
-
-            let mut right = String::new();
-            let (_, in_prog_t, _) = tasks::counts(&state.tasks);
-            if in_prog_t > 0 {
-                right.push_str(&format!(" ◼{} · ", in_prog_t));
-            }
-            if !state.queued_messages.is_empty() {
-                right.push_str(&format!(" queued({}) · ", state.queued_messages.len()));
-            }
-            right.push_str("Tab ↻ mode");
-            if !sub_agent_ids(&state.chat).is_empty() {
-                right.push_str(" · ↓ agent");
-            }
-            right.push_str(" · ? help");
-
-            let right_w = right.width();
-            let used: usize = spans.iter().map(|s| s.content.width()).sum();
-            if used + right_w + 2 <= max_w {
-                let pad = max_w - used - right_w;
-                spans.push(ratatui::text::Span::raw(" ".repeat(pad)));
-                spans.push(ratatui::text::Span::styled(right, dim));
-            }
-
+        // ── footer zone 渲染（四态）──────────────────────────────────────────
+        frame.render_widget(ratatui::widgets::Clear, zone_area);
+        if let Some(p) = &state.pending {
+            frame.render_widget(p.modal.render(), zone_area);
+        } else if let Some(picker) = &state.model_picker {
+            frame.render_widget(picker.render(), zone_area);
+        } else if let Some(picker) = &state.mode_picker {
+            frame.render_widget(picker.render(), zone_area);
+        } else if let Some(picker) = &state.session_picker {
+            frame.render_widget(picker.render(state.rename_input.as_ref(), state.session_action.as_ref()), zone_area);
+        } else if let Some(setup) = &state.provider_setup {
+            frame.render_widget(setup.render(), zone_area);
+        } else if show_suggestions {
             frame.render_widget(
-                ratatui::widgets::Paragraph::new(ratatui::text::Line::from(spans)),
-                footer_area,
+                suggestions::render(&state.suggestions, state.suggestion_idx),
+                zone_area,
             );
+        } else if has_notification {
+            frame.render_widget(render_notification(state, token_pct), zone_area);
+        } else {
+            frame.render_widget(render_hint(state), zone_area);
         }
+
+        // ── status bar（固定 1 行）───────────────────────────────────────────
+        frame.render_widget(render_status_bar(state, status_area.width, token_pct), status_area);
 
         // cursor（picker/向导/权限激活时隐藏；仅 suggestions 时仍在输入框内）
         if state.pending.is_none() && state.session_picker.is_none()
-            && state.model_picker.is_none() && state.provider_setup.is_none()
+            && state.model_picker.is_none() && state.mode_picker.is_none()
+            && state.provider_setup.is_none()
         {
             let (cx, cy) = state.input.cursor_screen_pos(input_area);
             frame.set_cursor_position((cx, cy));
         }
 
         // 任务面板（Ctrl+T）：无下拉菜单时锚定输入框上方
-        if menu_h == 0 && state.show_tasks && !state.tasks.is_empty() {
+        let no_menu = state.pending.is_none() && state.model_picker.is_none()
+            && state.mode_picker.is_none()
+            && state.session_picker.is_none() && state.provider_setup.is_none()
+            && !show_suggestions;
+        if no_menu && state.show_tasks && !state.tasks.is_empty() {
             let panel_area = tasks::area(area, base.input.y, state.tasks.len());
             frame.render_widget(ratatui::widgets::Clear, panel_area);
             frame.render_widget(tasks::render(&state.tasks), panel_area);
         }
-
-        // 下拉菜单：全部统一渲染在输入框正下方的 menu 区（命令补全 / 权限 / 各 picker / 向导）
-        if let Some(m) = menu_area {
-            frame.render_widget(ratatui::widgets::Clear, m);
-            if let Some(p) = &state.pending {
-                frame.render_widget(p.modal.render(), m);
-            } else if let Some(picker) = &state.model_picker {
-                frame.render_widget(picker.render(), m);
-            } else if let Some(picker) = &state.session_picker {
-                frame.render_widget(picker.render(), m);
-            } else if let Some(setup) = &state.provider_setup {
-                frame.render_widget(setup.render(), m);
-            } else if show_suggestions {
-                frame.render_widget(
-                    suggestions::render(&state.suggestions, state.suggestion_idx),
-                    m,
-                );
-            }
-        }
     }).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     Ok(())
+}
+
+// ── footer zone 渲染函数 ──────────────────────────────────────────────────────
+
+/// 通知态：显示临时状态消息或 token 警告。
+fn render_notification(state: &AppState, token_pct: Option<f64>) -> ratatui::widgets::Paragraph<'static> {
+    let dim = ratatui::style::Style::default().fg(MUTED);
+
+    if let Some(ref msg) = state.status_msg {
+        return ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled("● ", ratatui::style::Style::default().fg(WARN)),
+            ratatui::text::Span::styled(msg.clone(), dim),
+        ]));
+    }
+
+    if let Some(pct) = token_pct {
+        if pct >= 85.0 {
+            return ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
+                ratatui::text::Span::styled("● ", ratatui::style::Style::default().fg(ERR)),
+                ratatui::text::Span::styled(
+                    format!("Context low ({:.0}% remaining) · /compact to summarize", 100.0 - pct),
+                    ratatui::style::Style::default().fg(ERR),
+                ),
+            ]));
+        } else if pct >= 70.0 {
+            return ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
+                ratatui::text::Span::styled("● ", ratatui::style::Style::default().fg(WARN)),
+                ratatui::text::Span::styled(
+                    format!("{:.0}% context used · /compact to free space", pct),
+                    dim,
+                ),
+            ]));
+        }
+    }
+
+    ratatui::widgets::Paragraph::new(ratatui::text::Line::from(""))
+}
+
+/// 提醒态：上下文感知的快捷键提示。
+fn render_hint(state: &AppState) -> ratatui::widgets::Paragraph<'static> {
+    let dim = ratatui::style::Style::default().fg(MUTED);
+    let accent = ratatui::style::Style::default().fg(THINK);
+
+    let sub_ids = sub_agent_ids(&state.chat);
+
+    let hint = if let Some(id) = state.active_sub_agent {
+        // 子 agent 视图
+        format!("⟳ sub-agent {} · ↓ cycle · Esc back to main", &id.to_string()[..8])
+    } else if state.is_running {
+        if !sub_ids.is_empty() {
+            format!("{} agent(s) active · ↓ to view · esc to interrupt", sub_ids.len())
+        } else {
+            "esc to interrupt".to_string()
+        }
+    } else if !state.queued_messages.is_empty() {
+        format!("{} queued · Enter to send", state.queued_messages.len())
+    } else if !sub_ids.is_empty() {
+        format!("{} sub-agent(s) · ↓ to review · ? help · / commands · @ files", sub_ids.len())
+    } else {
+        "? help · Tab mode · / commands · @ files".to_string()
+    };
+
+    let style = if state.active_sub_agent.is_some() { accent } else { dim };
+    ratatui::widgets::Paragraph::new(ratatui::text::Line::from(
+        ratatui::text::Span::styled(hint, style),
+    ))
+}
+
+/// 状态栏：模式 · 模型 · token · 右侧运行状态。
+fn render_status_bar(state: &AppState, max_w: u16, token_pct: Option<f64>) -> ratatui::widgets::Paragraph<'static> {
+    use unicode_width::UnicodeWidthStr;
+
+    let dim = ratatui::style::Style::default().fg(MUTED);
+    let bold_dim = dim.add_modifier(ratatui::style::Modifier::BOLD);
+    let mcolor = super::theme::mode_color(&state.mode);
+    let max_w = max_w as usize;
+
+    let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
+
+    // 模式
+    spans.push(ratatui::text::Span::styled(
+        format!("⏵⏵ {}", state.mode),
+        bold_dim.fg(mcolor),
+    ));
+    spans.push(ratatui::text::Span::styled(" · ".to_string(), dim));
+
+    // 模型
+    spans.push(ratatui::text::Span::styled(state.model.clone(), dim));
+
+    // skip-perm
+    if state.skip_perms {
+        spans.push(ratatui::text::Span::styled(" · skip-perm".to_string(), dim.fg(ERR)));
+    }
+
+    // token 计数
+    if let Some(pct) = token_pct {
+        let tc = if pct >= 85.0 { ERR } else if pct >= 70.0 { WARN } else { MUTED };
+        let tokens_k = state.tokens as f64 / 1000.0;
+        let token_str = if tokens_k >= 1000.0 {
+            format!("{:.1}M", tokens_k / 1000.0)
+        } else {
+            format!("{:.0}k", tokens_k)
+        };
+        spans.push(ratatui::text::Span::styled(
+            format!(" · {}({:.0}%)", token_str, pct),
+            dim.fg(tc),
+        ));
+    }
+
+    // 右侧
+    let mut right = String::new();
+    let (_, in_prog_t, _) = tasks::counts(&state.tasks);
+    if in_prog_t > 0 {
+        right.push_str(&format!(" ◼{}", in_prog_t));
+    }
+    if state.is_running {
+        let spin = SPINNER[state.spinner_idx % SPINNER.len()];
+        right.push_str(&format!(" {} working", spin));
+    }
+    if !state.queued_messages.is_empty() {
+        right.push_str(&format!(" queued({})", state.queued_messages.len()));
+    }
+    if right.is_empty() {
+        right.push_str("Tab ↻ mode");
+    }
+
+    let right_w = right.width();
+    let used: usize = spans.iter().map(|s| s.content.width()).sum();
+    if used + right_w + 2 <= max_w {
+        let pad = max_w - used - right_w;
+        spans.push(ratatui::text::Span::raw(" ".repeat(pad)));
+        spans.push(ratatui::text::Span::styled(right, dim));
+    }
+
+    ratatui::widgets::Paragraph::new(ratatui::text::Line::from(spans))
 }
 
 fn build_init_prompt(cwd: &std::path::Path) -> String {
@@ -1462,12 +2021,12 @@ async fn compact_tui(
                 return;
             }
             let n = messages.len();
-            let summary_msg = build_compact_message(prior_summary.as_deref(), &summary);
+            let summary_msgs = build_compact_message(prior_summary.as_deref(), &summary);
             {
                 let mut guard = ctx.lock().await;
-                guard.replace_messages(vec![summary_msg.clone()]);
+                guard.replace_messages(summary_msgs.clone());
             }
-            session::replace_messages(session_id, &[summary_msg]).await.ok();
+            session::replace_messages(session_id, &summary_msgs).await.ok();
             state.chat.add_system(&format!(
                 "compacted: {} messages → summary ({} chars)",
                 n, summary.len()

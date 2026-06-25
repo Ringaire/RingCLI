@@ -10,10 +10,11 @@ use crate::tui::theme::{mode_color, ACCENT, MAIN, MUTED, UI};
 
 fn mode_desc(mode: &str) -> &'static str {
     match mode {
-        "auto"   => "all tools auto-approved",
+        "build"  => "all tools auto-approved",
         "edit"   => "file edits auto-approved, no shell",
+        "plan"   => "read/explore allowed, writes/bash ask",
         "ask"    => "read-only, no writes",
-        "bypass" => "all permission checks skipped",
+        "agent"  => "fully autonomous, no permission checks",
         _        => "",
     }
 }
@@ -71,7 +72,7 @@ fn welcome_lines(model: &str, mode: &str, cwd: &str) -> Vec<Line<'static>> {
     lines.push(Line::from(""));
 
     let tips: &[(&str, &str)] = &[
-        ("Tab",             "cycle mode: ask → edit → auto → bypass"),
+        ("Tab",             "cycle mode: ask → edit → plan → build → agent"),
         ("↑ / ↓",          "browse input history"),
         ("@file.ts",        "attach file or directory to message"),
         ("Ctrl+A / Ctrl+E", "line start / end"),

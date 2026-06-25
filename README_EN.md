@@ -95,7 +95,7 @@ cargo run --release
 
 ### Configuration
 
-Config file at `~/.config/nekocode/settings.json` (XDG spec), supports JSONC format (with comments).
+Config file at `~/.config/neko/settings.jsonc` (XDG spec), supports JSONC format (with comments).
 
 ```jsonc
 {
@@ -105,7 +105,7 @@ Config file at `~/.config/nekocode/settings.json` (XDG spec), supports JSONC for
   // Provider configuration
   "providers": {
     "anthropic": {
-      "apiKey": "sk-ant-xxx"
+      "apiKey": "sk-ant-xxx"  // or use env var ANTHROPIC_API_KEY
     },
     "deepseek": {
       "apiKey": "sk-xxx"
@@ -113,6 +113,8 @@ Config file at `~/.config/nekocode/settings.json` (XDG spec), supports JSONC for
   }
 }
 ```
+
+Provider definitions at `~/.config/neko/providers.json` (global) or `.neko/providers.json` (project-level).
 
 ---
 

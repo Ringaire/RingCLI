@@ -2,6 +2,7 @@ pub mod core;
 pub mod chat;
 pub mod input;
 pub mod markdown;
+pub mod mode_picker;
 pub mod model_picker;
 pub mod session_picker;
 pub mod permission;

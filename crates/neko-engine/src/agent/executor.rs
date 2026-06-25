@@ -50,6 +50,8 @@ pub struct AgentExecutor {
     pub thinking_budget: Option<u32>,
     /// 单次请求最大输出 token 数（来自 SessionConfig）。
     pub max_output_tokens: u32,
+    /// reasoning effort 级别（low/medium/high/max）。
+    pub reasoning_effort: Option<String>,
 }
 
 impl AgentExecutor {
@@ -76,6 +78,7 @@ impl AgentExecutor {
             persist:            true,
             thinking_budget:    None,
             max_output_tokens:  DEFAULT_MAX_OUTPUT_TOKENS,
+            reasoning_effort:   None,
         }
     }
 
@@ -105,6 +108,7 @@ impl AgentExecutor {
             persist:            false,
             thinking_budget:    None,
             max_output_tokens:  DEFAULT_MAX_OUTPUT_TOKENS,
+            reasoning_effort:   None,
         }
     }
 
@@ -146,6 +150,7 @@ impl AgentExecutor {
             stop:              Vec::new(),
             extended_thinking: self.thinking_budget.is_some(),
             thinking_budget:   self.thinking_budget,
+            reasoning_effort:  self.reasoning_effort.clone(),
         };
 
         let mut stream = match self.provider.stream(&req, signal.clone()).await {

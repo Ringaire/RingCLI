@@ -188,12 +188,132 @@ fn merge_config(base: &mut NekoUserConfig, over: NekoUserConfig) {
     if let Some(u) = over.ui      { base.ui      = Some(u); }
 }
 
+// ── Claude Code 兼容：.mcp.json 读取 ──────────────────────────────────────────
+
+/// 从 cwd 向上遍历，收集所有 `.mcp.json` 文件路径。
+///
+/// 返回顺序为**远→近**（父目录在前，cwd 在后），使加载时近的覆盖远的，
+/// 与 Claude Code 的 `config.ts:909-961` 遍历逻辑对齐。
+fn find_mcp_json_files(cwd: &std::path::Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut current = Some(cwd);
+    while let Some(dir) = current {
+        let path = dir.join(".mcp.json");
+        if path.is_file() {
+            files.push(path);
+        }
+        current = dir.parent();
+    }
+    files.reverse(); // 近→远 反转为 远→近
+    files
+}
+
+/// 展开 `${VAR}` 和 `$VAR` 环境变量引用。
+///
+/// 对照 CC `config.ts:556-616`：缺失变量保留原样（不阻塞），仅 stdio 的
+/// command/args/env 做展开。
+fn expand_env_vars(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' && i + 1 < bytes.len() {
+            // ${VAR} 形式
+            if bytes[i + 1] == b'{' {
+                if let Some(end) = s[i + 2..].find('}') {
+                    let var = &s[i + 2..i + 2 + end];
+                    match std::env::var(var) {
+                        Ok(val) => out.push_str(&val),
+                        Err(_) => out.push_str(&s[i..i + 2 + end + 1]), // 保留原样
+                    }
+                    i += 2 + end + 1;
+                    continue;
+                }
+            }
+            // $VAR 形式（字母/下划线开头，字母数字下划线续接）
+            if bytes[i + 1].is_ascii_alphabetic() || bytes[i + 1] == b'_' {
+                let start = i + 1;
+                let mut end = start;
+                while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+                    end += 1;
+                }
+                let var = &s[start..end];
+                match std::env::var(var) {
+                    Ok(val) => out.push_str(&val),
+                    Err(_) => out.push_str(&s[i..end]),
+                }
+                i = end;
+                continue;
+            }
+        }
+        // 安全的 UTF-8 边界推进
+        let ch_len = utf8_char_len(bytes[i]);
+        out.push_str(&s[i..i + ch_len]);
+        i += ch_len;
+    }
+    out
+}
+
+/// 返回 UTF-8 起始字节对应的字符长度。
+fn utf8_char_len(byte: u8) -> usize {
+    if byte < 0x80 { 1 }
+    else if byte < 0xC0 { 1 } // 续接字节（不应出现在起始位置，容错）
+    else if byte < 0xE0 { 2 }
+    else if byte < 0xF0 { 3 }
+    else { 4 }
+}
+
+/// 递归地对 JSON Value 中的所有字符串做环境变量展开。
+fn expand_env_in_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(s) => { *s = expand_env_vars(s); }
+        serde_json::Value::Array(arr) => { for v in arr { expand_env_in_value(v); } }
+        serde_json::Value::Object(map) => { for (_, v) in map.iter_mut() { expand_env_in_value(v); } }
+        _ => {}
+    }
+}
+
+/// 解析 `.mcp.json` 文件内容。
+///
+/// - 预处理缺省 `type` 字段：无 `type` → 默认 `"stdio"`（兼容 CC）
+/// - 展开 `${VAR}` / `$VAR` 环境变量（command/args/env）
+/// - 返回 server name → config 映射
+fn parse_mcp_json(raw: &str) -> HashMap<String, McpServerConfig> {
+    let mut value: serde_json::Value = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(_) => return HashMap::new(),
+    };
+
+    if let Some(servers) = value.get_mut("mcpServers").and_then(|v| v.as_object_mut()) {
+        for (_, server) in servers.iter_mut() {
+            // 无 type → 默认 stdio
+            if server.get("type").is_none() {
+                if let Some(obj) = server.as_object_mut() {
+                    obj.insert("type".into(), serde_json::Value::String("stdio".into()));
+                }
+            }
+            // 环境变量展开
+            expand_env_in_value(server);
+        }
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Wrapper {
+        mcp_servers: HashMap<String, McpServerConfig>,
+    }
+
+    serde_json::from_value::<Wrapper>(value)
+        .map(|w| w.mcp_servers)
+        .unwrap_or_default()
+}
+
 // ── 加载配置 ──────────────────────────────────────────────────────────────────
 
 pub async fn load_config(cwd: Option<&std::path::Path>) -> ResolvedConfig {
     let mut merged = NekoUserConfig::default();
 
-    // 1. 全局配置
+    // 1. 全局配置 (~/.config/neko/settings.jsonc)
     let global_path = paths::config_path();
     if let Ok(raw) = tokio::fs::read_to_string(&global_path).await {
         if let Ok(cfg) = parse_jsonc::<NekoUserConfig>(&raw) {
@@ -201,7 +321,22 @@ pub async fn load_config(cwd: Option<&std::path::Path>) -> ResolvedConfig {
         }
     }
 
-    // 2. 项目配置（从 cwd 向上找 .neko/settings.jsonc）
+    // 2. Claude Code 兼容：从 cwd 向上遍历 .mcp.json（远→近，近覆盖远）
+    if let Some(dir) = cwd {
+        for path in find_mcp_json_files(dir) {
+            if let Ok(raw) = tokio::fs::read_to_string(&path).await {
+                let mcp = parse_mcp_json(&raw);
+                if !mcp.is_empty() {
+                    let target = merged.mcp_servers.get_or_insert_with(HashMap::new);
+                    for (k, v) in mcp {
+                        target.insert(k, v);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. 项目配置 (.neko/settings.jsonc)
     if let Some(dir) = cwd {
         let project_path = dir.join(".neko").join("settings.jsonc");
         if let Ok(raw) = tokio::fs::read_to_string(&project_path).await {
@@ -209,7 +344,7 @@ pub async fn load_config(cwd: Option<&std::path::Path>) -> ResolvedConfig {
                 merge_config(&mut merged, cfg);
             }
         }
-        // 3. 本地覆盖（不提交）
+        // 4. 本地覆盖（不提交）
         let local_path = dir.join(".neko").join("settings.local.jsonc");
         if let Ok(raw) = tokio::fs::read_to_string(&local_path).await {
             if let Ok(cfg) = parse_jsonc::<NekoUserConfig>(&raw) {
@@ -356,4 +491,162 @@ fn read_proxy_env() -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_mcp_json_explicit_stdio() {
+        let raw = r#"{
+            "mcpServers": {
+                "fs": {
+                    "type": "stdio",
+                    "command": "npx",
+                    "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+                    "env": { "ROOT": "/tmp" }
+                }
+            }
+        }"#;
+        let mcp = parse_mcp_json(raw);
+        assert_eq!(mcp.len(), 1);
+        match mcp.get("fs").unwrap() {
+            McpServerConfig::Stdio { command, args, env } => {
+                assert_eq!(command, "npx");
+                assert_eq!(args, &vec!["-y", "@modelcontextprotocol/server-filesystem"]);
+                assert_eq!(env.get("ROOT").map(|s| s.as_str()), Some("/tmp"));
+            }
+            _ => panic!("expected Stdio"),
+        }
+    }
+
+    #[test]
+    fn parse_mcp_json_implicit_stdio() {
+        // CC 格式：无 type 字段 → 默认 stdio
+        let raw = r#"{
+            "mcpServers": {
+                "fs": {
+                    "command": "npx",
+                    "args": ["-y", "@mcp/server"]
+                }
+            }
+        }"#;
+        let mcp = parse_mcp_json(raw);
+        assert_eq!(mcp.len(), 1);
+        assert!(matches!(mcp.get("fs").unwrap(), McpServerConfig::Stdio { .. }));
+    }
+
+    #[test]
+    fn parse_mcp_json_sse() {
+        let raw = r#"{
+            "mcpServers": {
+                "remote": {
+                    "type": "sse",
+                    "url": "https://example.com/mcp",
+                    "headers": { "Authorization": "Bearer token" }
+                }
+            }
+        }"#;
+        let mcp = parse_mcp_json(raw);
+        assert_eq!(mcp.len(), 1);
+        match mcp.get("remote").unwrap() {
+            McpServerConfig::Sse { url, headers } => {
+                assert_eq!(url, "https://example.com/mcp");
+                assert_eq!(headers.get("Authorization").map(|s| s.as_str()), Some("Bearer token"));
+            }
+            _ => panic!("expected Sse"),
+        }
+    }
+
+    #[test]
+    fn parse_mcp_json_mixed_servers() {
+        let raw = r#"{
+            "mcpServers": {
+                "local": { "command": "node", "args": ["server.js"] },
+                "remote": { "type": "sse", "url": "https://example.com/mcp" }
+            }
+        }"#;
+        let mcp = parse_mcp_json(raw);
+        assert_eq!(mcp.len(), 2);
+        assert!(matches!(mcp.get("local").unwrap(), McpServerConfig::Stdio { .. }));
+        assert!(matches!(mcp.get("remote").unwrap(), McpServerConfig::Sse { .. }));
+    }
+
+    #[test]
+    fn parse_mcp_json_env_expansion() {
+        std::env::set_var("NEKO_TEST_MCP_CMD", "expanded-cmd");
+        std::env::set_var("NEKO_TEST_MCP_KEY", "secret123");
+        let raw = r#"{
+            "mcpServers": {
+                "test": {
+                    "command": "${NEKO_TEST_MCP_CMD}",
+                    "args": ["--key", "$NEKO_TEST_MCP_KEY"],
+                    "env": { "TOKEN": "${NEKO_TEST_MCP_KEY}" }
+                }
+            }
+        }"#;
+        let mcp = parse_mcp_json(raw);
+        match mcp.get("test").unwrap() {
+            McpServerConfig::Stdio { command, args, env } => {
+                assert_eq!(command, "expanded-cmd");
+                assert_eq!(args, &vec!["--key", "secret123"]);
+                assert_eq!(env.get("TOKEN").map(|s| s.as_str()), Some("secret123"));
+            }
+            _ => panic!("expected Stdio"),
+        }
+    }
+
+    #[test]
+    fn parse_mcp_json_missing_var_preserved() {
+        let raw = r#"{
+            "mcpServers": {
+                "test": {
+                    "command": "${NEKO_NONEXISTENT_VAR}",
+                    "args": []
+                }
+            }
+        }"#;
+        let mcp = parse_mcp_json(raw);
+        match mcp.get("test").unwrap() {
+            McpServerConfig::Stdio { command, .. } => {
+                // 缺失变量保留原样
+                assert_eq!(command, "${NEKO_NONEXISTENT_VAR}");
+            }
+            _ => panic!("expected Stdio"),
+        }
+    }
+
+    #[test]
+    fn parse_mcp_json_invalid_returns_empty() {
+        let mcp = parse_mcp_json("not json at all");
+        assert!(mcp.is_empty());
+    }
+
+    #[test]
+    fn parse_mcp_json_empty_servers() {
+        let raw = r#"{ "mcpServers": {} }"#;
+        let mcp = parse_mcp_json(raw);
+        assert!(mcp.is_empty());
+    }
+
+    #[test]
+    fn expand_env_vars_brace_form() {
+        std::env::set_var("NEKO_TEST_EXPAND", "hello");
+        assert_eq!(expand_env_vars("${NEKO_TEST_EXPAND}"), "hello");
+        assert_eq!(expand_env_vars("pre-${NEKO_TEST_EXPAND}-post"), "pre-hello-post");
+    }
+
+    #[test]
+    fn expand_env_vars_dollar_form() {
+        std::env::set_var("NEKO_TEST_DOLLAR", "world");
+        assert_eq!(expand_env_vars("$NEKO_TEST_DOLLAR"), "world");
+        assert_eq!(expand_env_vars("x-$NEKO_TEST_DOLLAR-y"), "x-world-y");
+    }
+
+    #[test]
+    fn expand_env_vars_no_var_preserved() {
+        assert_eq!(expand_env_vars("plain text"), "plain text");
+        assert_eq!(expand_env_vars("${NEKO_DOES_NOT_EXIST}"), "${NEKO_DOES_NOT_EXIST}");
+    }
 }

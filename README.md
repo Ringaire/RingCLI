@@ -95,7 +95,7 @@ cargo run --release
 
 ### 配置文件
 
-配置文件位于 `~/.config/nekocode/settings.json`（XDG 规范），支持 JSONC 格式（可添加注释）。
+配置文件位于 `~/.config/neko/settings.jsonc`（XDG 规范），支持 JSONC 格式（可添加注释）。
 
 ```jsonc
 {
@@ -113,6 +113,8 @@ cargo run --release
   }
 }
 ```
+
+Provider 定义位于 `~/.config/neko/providers.json`（全局）或 `.neko/providers.json`（项目级）。
 
 ---
 

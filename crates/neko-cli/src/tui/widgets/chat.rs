@@ -226,10 +226,19 @@ impl ChatWidget {
             if !show_reasoning && b.kind == BubbleKind::Reasoning {
                 continue;
             }
-            // 子 agent 视图过滤
-            if let Some(filter) = filter_sub {
-                if b.sub_agent != Some(filter) && b.kind != BubbleKind::System && b.sub_agent.is_some() {
-                    continue;
+            // 视图分离：主 agent 和子 agent 的气泡不在同一界面。
+            // - 主视图（None）：主 agent 气泡 + Spawn 通告 + System 消息，跳过子 agent 的内容
+            // - 子视图（Some）：仅该子 agent 的气泡 + System 消息
+            match filter_sub {
+                None => {
+                    if b.sub_agent.is_some() && b.kind != BubbleKind::Spawn {
+                        continue;
+                    }
+                }
+                Some(filter) => {
+                    if b.sub_agent != Some(filter) && b.kind != BubbleKind::System {
+                        continue;
+                    }
                 }
             }
             let (indent, indent_w): (&'static str, usize) =

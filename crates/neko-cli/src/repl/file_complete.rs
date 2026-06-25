@@ -204,6 +204,108 @@ pub fn expand_mentions(text: &str, cwd: &Path) -> String {
     out
 }
 
+// ── 粘贴处理：file:// URL → @path 引用 ─────────────────────────────────────
+
+/// 对文件路径做百分号解码（`%20` → 空格 等）。
+fn url_decode_path(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(
+                std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
+                16,
+            ) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// 把 `file://` URL 解析为本地路径。
+///
+/// 遵循 RFC 8089 `file:` URI 格式：`file://<host>/<path>`
+///
+/// | 场景 | 输入 | 输出 |
+/// |------|------|------|
+/// | Linux 本地 | `file:///home/user/f.txt` | `/home/user/f.txt` |
+/// | localhost | `file://localhost/home/user/f.txt` | `/home/user/f.txt` |
+/// | Windows 盘符 | `file:///C:/Users/f.txt` | `C:/Users/f.txt` |
+/// | WSL（旧） | `file://wsl$/Ubuntu/home/u/f.txt` | `//wsl$/Ubuntu/home/u/f.txt` |
+/// | WSL（新） | `file://wsl.localhost/Ubuntu/home/u/f.txt` | `//wsl.localhost/Ubuntu/home/u/f.txt` |
+/// | SMB 网络路径 | `file://server/share/f.txt` | `//server/share/f.txt` |
+///
+/// 路径统一保持正斜杠 `/`——Rust `std::path::Path` 在 Windows 上同时接受
+/// `/` 和 `\`，无需转换，避免反斜杠转义问题。
+///
+/// 非 `file://` 开头 → `None`。
+fn file_url_to_path(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("file://")?;
+
+    // 分割 <host>/<path>：第一个 '/' 之前是 host，之后是 path。
+    // rest 以 '/' 开头时 host 为空（`file:///path`）。
+    let (host, path) = match rest.find('/') {
+        Some(idx) => (&rest[..idx], &rest[idx..]),
+        None => return None, // 仅有 host 无 path，无效
+    };
+
+    let raw_path = if host.is_empty() || host == "localhost" {
+        // 本地路径：Windows 盘符 /X:/... → X:/...
+        let bytes = path.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0] == b'/'
+            && bytes[1].is_ascii_alphabetic()
+            && bytes[2] == b':'
+        {
+            path[1..].to_string()
+        } else {
+            path.to_string()
+        }
+    } else {
+        // 远程路径（WSL、SMB 等）→ UNC 路径 //host/path
+        format!("//{host}{path}")
+    };
+
+    Some(url_decode_path(&raw_path))
+}
+
+/// 处理粘贴文本：把 `file://` URL 转换为 `@path` 引用。
+///
+/// - 整行（或多行）都是 `file://` URL → 每个转为 `@path`，空格分隔
+/// - 文本中不含 `file://` → 原样返回
+/// - 混合文本 → 原样返回（避免误伤普通文本）
+///
+/// 图片等二进制文件因 `read_to_string` 失败会被 `expand_mentions` 自动跳过，
+/// 只保留路径文本让模型知晓文件位置。
+pub fn process_paste(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return text.to_string();
+    }
+    let all_file_urls = lines.iter().all(|line| {
+        let t = line.trim();
+        !t.is_empty() && t.starts_with("file://")
+    });
+    if !all_file_urls {
+        return text.to_string();
+    }
+    let paths: Vec<String> = lines.iter()
+        .filter_map(|line| file_url_to_path(line.trim()))
+        .map(|p| format!("@{p}"))
+        .collect();
+    if paths.is_empty() {
+        text.to_string()
+    } else {
+        format!("{} ", paths.join(" "))
+    }
+}
+
 /// 取 cwd 文件索引；陈旧（>`REFRESH_AFTER`）则重建（捡会话内新建的文件）。
 fn index(cwd: &Path) -> Arc<Vec<String>> {
     let cell = INDEX.get_or_init(|| Mutex::new(None));
@@ -298,5 +400,85 @@ mod tests {
         assert!(expand_mentions("just text", &dir).is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_url_to_path_parses_standard_urls() {
+        // Linux 本地
+        assert_eq!(
+            file_url_to_path("file:///home/user/image.png").as_deref(),
+            Some("/home/user/image.png"),
+        );
+        // localhost
+        assert_eq!(
+            file_url_to_path("file://localhost/home/user/image.png").as_deref(),
+            Some("/home/user/image.png"),
+        );
+        // Windows 盘符
+        assert_eq!(
+            file_url_to_path("file:///C:/Users/image.png").as_deref(),
+            Some("C:/Users/image.png"),
+        );
+    }
+
+    #[test]
+    fn file_url_to_path_parses_unc_paths() {
+        // WSL 旧格式
+        assert_eq!(
+            file_url_to_path("file://wsl$/Ubuntu/home/user/file.txt").as_deref(),
+            Some("//wsl$/Ubuntu/home/user/file.txt"),
+        );
+        // WSL 新格式
+        assert_eq!(
+            file_url_to_path("file://wsl.localhost/Ubuntu/home/user/file.txt").as_deref(),
+            Some("//wsl.localhost/Ubuntu/home/user/file.txt"),
+        );
+        // SMB 网络路径
+        assert_eq!(
+            file_url_to_path("file://server/share/file.txt").as_deref(),
+            Some("//server/share/file.txt"),
+        );
+    }
+
+    #[test]
+    fn file_url_to_path_decodes_percent_encoding() {
+        assert_eq!(
+            file_url_to_path("file:///home/user/my%20file.png").as_deref(),
+            Some("/home/user/my file.png"),
+        );
+        assert_eq!(
+            file_url_to_path("file:///home/user/%E4%B8%AD%E6%96%87.txt").as_deref(),
+            Some("/home/user/中文.txt"),
+        );
+    }
+
+    #[test]
+    fn file_url_to_path_rejects_non_file_urls() {
+        assert!(file_url_to_path("https://example.com/file.png").is_none());
+        assert!(file_url_to_path("/home/user/file.png").is_none());
+        assert!(file_url_to_path("plain text").is_none());
+    }
+
+    #[test]
+    fn process_paste_converts_single_file_url() {
+        let out = process_paste("file:///home/user/image.png");
+        assert_eq!(out, "@/home/user/image.png ");
+    }
+
+    #[test]
+    fn process_paste_converts_multiple_file_urls() {
+        let out = process_paste("file:///home/user/a.png\nfile:///home/user/b.png");
+        assert_eq!(out, "@/home/user/a.png @/home/user/b.png ");
+    }
+
+    #[test]
+    fn process_paste_preserves_plain_text() {
+        assert_eq!(process_paste("hello world"), "hello world");
+        assert_eq!(process_paste("check this file:///path/to/file.txt out"), "check this file:///path/to/file.txt out");
+    }
+
+    #[test]
+    fn process_paste_handles_empty() {
+        assert_eq!(process_paste(""), "");
     }
 }

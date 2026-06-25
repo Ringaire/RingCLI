@@ -7,6 +7,7 @@ members = [
     "crates/neko-tools",
     "crates/neko-mcp",
     "crates/neko-skills",
+    "crates/neko-engine",
     "crates/neko-cli",
 ]
 

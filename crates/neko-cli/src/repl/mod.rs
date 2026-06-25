@@ -12,7 +12,7 @@ use neko_core::session;
 use neko_core::tools::Message;
 use neko_providers::provider::DEFAULT_THINKING_BUDGET;
 
-use crate::agent::{AgentContext, AgentExecutor, TurnResult};
+use neko_engine::{AgentContext, AgentExecutor, TurnResult};
 use crate::args::Args;
 use crate::bootstrap::{self, BootstrappedRuntime};
 
@@ -82,6 +82,9 @@ pub async fn run_plain(mut runtime: BootstrappedRuntime, args: &Args) -> Result<
                 runtime.permissions.lock().await.set_mode(mode);
                 println!("[mode switched to {}]", mode);
             }
+            CommandOutcome::OpenModePicker => {
+                println!("usage: /mode ask|edit|plan|build|agent");
+            }
             CommandOutcome::SwitchModel(model) => {
                 switch_model(&mut runtime, &mut ctx, model).await;
             }
@@ -95,14 +98,36 @@ pub async fn run_plain(mut runtime: BootstrappedRuntime, args: &Args) -> Result<
             CommandOutcome::QuickConnect { provider, api_key, base_url } => {
                 quick_connect(&mut runtime, &mut ctx, provider, api_key, base_url).await;
             }
-            CommandOutcome::SwitchThinking { enabled, budget, show } => {
-                let show_str = if show.unwrap_or(true) { "show" } else { "hide" };
+            CommandOutcome::SwitchThinking { enabled, budget } => {
                 if enabled {
                     let budget = budget.unwrap_or(DEFAULT_THINKING_BUDGET);
-                    println!("[thinking ON (budget: {} tokens, display: {})]", budget, show_str);
+                    println!("[thinking ON (budget: {} tokens)]", budget);
                 } else {
                     println!("[thinking OFF]");
                 }
+            }
+            CommandOutcome::ToggleThinkingDisplay => {
+                println!("[reasoning display toggled — TUI only]");
+            }
+            CommandOutcome::SetEffort(level) => {
+                if level == "off" {
+                    println!("[effort: off (model default)]");
+                } else {
+                    println!("[effort: {level}]");
+                }
+            }
+            CommandOutcome::NewSession => {
+                let new_session = session::create_session(
+                    runtime.session.meta.cwd.clone(),
+                    Some(runtime.model.clone()),
+                ).await;
+                ctx = AgentContext::from_session(
+                    &new_session,
+                    runtime.model.clone(),
+                    Some(runtime.system_prompt.clone()),
+                );
+                runtime.session = new_session;
+                println!("[started new conversation]");
             }
             CommandOutcome::Clear => {
                 print!("\x1B[2J\x1B[H");
@@ -115,7 +140,19 @@ pub async fn run_plain(mut runtime: BootstrappedRuntime, args: &Args) -> Result<
             CommandOutcome::Resume(id) => {
                 resume_session(&mut runtime, &mut ctx, id).await?;
             }
+            CommandOutcome::OpenSessionPicker => {
+                commands::list_sessions().await?;
+            }
             CommandOutcome::Quit => break,
+            CommandOutcome::EnterPlan(desc) => {
+                let prompt = format!(
+                    "The user wants to create a plan. Task: {}\n\n\
+                     Use `enter_plan_mode` to switch to plan mode, research, \
+                     write the plan, then call `exit_plan_mode` to submit.",
+                    if desc.is_empty() { "architecture / task planning" } else { &desc }
+                );
+                process_user_input(&mut runtime, &mut ctx, prompt, &mut reader).await?;
+            }
             CommandOutcome::InitAgentsMd => {
                 let agents_path = runtime.cwd.join("AGENTS.md");
                 if agents_path.exists() {
@@ -127,9 +164,7 @@ pub async fn run_plain(mut runtime: BootstrappedRuntime, args: &Args) -> Result<
             }
             CommandOutcome::Handled => {
                 let trimmed = input.trim();
-                if trimmed == "/sessions" || trimmed == "/ls" || trimmed == "/resume" {
-                    commands::list_sessions().await?;
-                } else if let Some(rest) = trimmed.strip_prefix("/memory").or_else(|| trimmed.strip_prefix("/mem")) {
+                if let Some(rest) = trimmed.strip_prefix("/memory").or_else(|| trimmed.strip_prefix("/mem")) {
                     commands::handle_memory(rest.trim()).await?;
                 }
             }
@@ -238,10 +273,10 @@ async fn run_agent_turn(
 
 /// 在 plain 模式下通过 stdin 询问权限决定。
 async fn prompt_permission_stdin(
-    req:    &crate::agent::PermissionRequest,
+    req:    &neko_engine::PermissionRequest,
     reader: &mut StdinReader,
-) -> crate::agent::PermissionDecision {
-    use crate::agent::PermissionDecision;
+) -> neko_engine::PermissionDecision {
+    use neko_engine::PermissionDecision;
     use tokio::io::AsyncBufReadExt;
     use std::io::Write;
 
@@ -351,9 +386,9 @@ async fn compact_context(runtime: &mut BootstrappedRuntime, ctx: &mut AgentConte
     }
 
     let n = ctx.messages.len();
-    let summary_msg = build_compact_message(prior_summary.as_deref(), &summary_text);
-    ctx.replace_messages(vec![summary_msg.clone()]);
-    session::replace_messages(runtime.session.meta.id, &ctx.messages).await.ok();
+    let summary_msgs = build_compact_message(prior_summary.as_deref(), &summary_text);
+    ctx.replace_messages(summary_msgs.clone());
+    session::replace_messages(runtime.session.meta.id, &summary_msgs).await.ok();
 
     println!("[compacted: {} messages → summary ({} chars)]", n, summary_text.len());
     Ok(())
@@ -371,6 +406,9 @@ async fn resume_session(runtime: &mut BootstrappedRuntime, ctx: &mut AgentContex
             println!("[session {} not found]", id);
         }
     }
+    // flush stdout so the message appears before the next prompt
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
     Ok(())
 }
 
@@ -395,7 +433,18 @@ fn print_prompt(runtime: &BootstrappedRuntime) {
 fn build_orchestrator_executor(
     runtime:  &BootstrappedRuntime,
     provider: std::sync::Arc<dyn neko_providers::Provider>,
-    perm_tx:  Option<crate::agent::permission::PermissionSender>,
+    perm_tx:  Option<neko_engine::agent::permission::PermissionSender>,
 ) -> AgentExecutor {
-    crate::agent::orchestrator::build_executor(runtime, provider, perm_tx)
+    neko_engine::agent::orchestrator::build_executor(
+        runtime.tools.clone(),
+        runtime.permissions.clone(),
+        runtime.bus.clone(),
+        runtime.catalog.clone(),
+        runtime.model.clone(),
+        runtime.session.meta.id,
+        runtime.cwd.clone(),
+        runtime.config.session.max_tokens,
+        provider,
+        perm_tx,
+    )
 }

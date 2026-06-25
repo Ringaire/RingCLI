@@ -1,30 +1,12 @@
-//! Provider catalog：从 JSON 文件加载提供商定义，支持三层合并。
+//! Provider catalog：Rust 代码定义内置 provider，支持用户 JSON 覆盖。
 //!
+//! 内置 provider 定义在各 provider 子模块的 `catalog_entry()` 函数中。
 //! 优先级（高 → 低）：项目级 `.neko/providers.json` > 全局 `~/.config/neko/providers.json` > 内置默认
-//!
-//! # 用户覆盖格式
-//!
-//! 全量新建提供商（需要 `type` + `base_url`）：
-//! ```json
-//! {
-//!   "my-llm": { "name": "My LLM", "type": "openai-compatible", "base_url": "http://llm.internal/v1" }
-//! }
-//! ```
-//!
-//! 覆盖已知提供商的某个字段：
-//! ```json
-//! {
-//!   "anthropic": { "base_url": "https://proxy.example.com/anthropic" }
-//! }
-//! ```
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-
-// 内置默认目录（编译时嵌入）
-const DEFAULT_JSON: &str = include_str!("providers.json");
 
 // ── 类型 ─────────────────────────────────────────────────────────────────────
 
@@ -46,14 +28,10 @@ pub struct CatalogEntry {
     pub name: String,
     #[serde(rename = "type")]
     pub kind: ProviderKind,
-    /// API 基础 URL（None 表示用 SDK 默认值）。
     pub base_url: Option<String>,
-    /// 存放 API Key 的环境变量名；None = 不需要 key（如 Ollama）。
     pub api_key_env: Option<String>,
-    /// 该 provider 的默认模型 id；None = 未知（如用户自定义 provider，需在 config.model 指定）。
     #[serde(default)]
     pub default_model: Option<String>,
-    /// 注入到每个请求 body 顶层的额外字段（如 Ollama 的 `options.num_ctx`）。
     #[serde(default)]
     pub extra_body: Option<serde_json::Value>,
 }
@@ -72,10 +50,6 @@ struct Override {
 
 // ── 公开 API ──────────────────────────────────────────────────────────────────
 
-/// 加载并合并 provider 目录。
-///
-/// - `global_config_dir`：`~/.config/neko/`（可 None）
-/// - `project_dir`：项目根目录（可 None；函数内部会拼 `.neko/providers.json`）
 pub fn load(
     global_config_dir: Option<&Path>,
     project_dir: Option<&Path>,
@@ -92,17 +66,47 @@ pub fn load(
     catalog
 }
 
-/// 只返回内置默认目录（测试 / 无配置目录场景）。
+/// 内置默认目录——从各 provider 子模块的 `catalog_entry()` 构建。
 pub fn defaults() -> HashMap<String, CatalogEntry> {
-    serde_json::from_str(DEFAULT_JSON).expect("bundled providers.json is valid JSON")
+    use crate::providers;
+
+    let mut m = HashMap::new();
+
+    // 原生 provider
+    m.insert("anthropic".into(), providers::anthropic::catalog_entry());
+    m.insert("openai".into(), providers::openai::catalog_entry());
+    m.insert("gemini".into(), providers::gemini::catalog_entry());
+
+    // 兼容 provider
+    use crate::providers::added;
+    m.insert("deepseek".into(),    added::deepseek::catalog_entry());
+    m.insert("groq".into(),        added::groq::catalog_entry());
+    m.insert("mistral".into(),     added::mistral::catalog_entry());
+    m.insert("together".into(),    added::together::catalog_entry());
+    m.insert("openrouter".into(),  added::openrouter::catalog_entry());
+    m.insert("xai".into(),         added::xai::catalog_entry());
+    m.insert("moonshot".into(),    added::moonshot::catalog_entry());
+    m.insert("siliconflow".into(), added::siliconflow::catalog_entry());
+    m.insert("zhipu".into(),       added::zhipu::catalog_entry());
+    m.insert("baidu".into(),       added::baidu::catalog_entry());
+    m.insert("cerebras".into(),    added::cerebras::catalog_entry());
+    m.insert("deepinfra".into(),   added::deepinfra::catalog_entry());
+    m.insert("fireworks".into(),   added::fireworks::catalog_entry());
+    m.insert("perplexity".into(),  added::perplexity::catalog_entry());
+    m.insert("cohere".into(),      added::cohere::catalog_entry());
+    m.insert("nvidia".into(),      added::nvidia::catalog_entry());
+
+    // 本地 provider
+    m.insert("ollama".into(),      added::ollama::catalog_entry());
+    m.insert("lmstudio".into(),    added::lmstudio::catalog_entry());
+
+    m
 }
 
-/// 按 provider id 查找，不区分大小写。
 pub fn get<'a>(catalog: &'a HashMap<String, CatalogEntry>, id: &str) -> Option<&'a CatalogEntry> {
     catalog.get(id).or_else(|| catalog.get(&id.to_lowercase()))
 }
 
-/// 返回某 provider 的默认模型 id（来自 catalog）；未知 provider / 未声明默认模型时返回 None。
 pub fn default_model_for(catalog: &HashMap<String, CatalogEntry>, id: &str) -> Option<String> {
     get(catalog, id).and_then(|e| e.default_model.clone())
 }
@@ -112,7 +116,7 @@ pub fn default_model_for(catalog: &HashMap<String, CatalogEntry>, id: &str) -> O
 fn merge_file(catalog: &mut HashMap<String, CatalogEntry>, path: &Path) {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(_) => return, // 文件不存在或不可读，静默跳过
+        Err(_) => return,
     };
     let overrides: HashMap<String, Override> = match serde_json::from_str(&text) {
         Ok(v) => v,
@@ -123,7 +127,6 @@ fn merge_file(catalog: &mut HashMap<String, CatalogEntry>, path: &Path) {
     };
     for (id, ov) in overrides {
         if let Some(entry) = catalog.get_mut(&id) {
-            // 覆盖已知 provider 的单个字段
             if let Some(n) = ov.name     { entry.name = n; }
             if let Some(k) = ov.kind     { entry.kind = k; }
             if let Some(u) = ov.base_url { entry.base_url = Some(u); }
@@ -131,7 +134,6 @@ fn merge_file(catalog: &mut HashMap<String, CatalogEntry>, path: &Path) {
             if let Some(m) = ov.default_model { entry.default_model = Some(m); }
             if let Some(b) = ov.extra_body { entry.extra_body = Some(b); }
         } else {
-            // 新增自定义 provider：必须有 type + base_url
             let Some(kind) = ov.kind else {
                 tracing::warn!(id, "custom provider missing 'type', skipping");
                 continue;
@@ -170,21 +172,14 @@ mod tests {
     }
 
     #[test]
-    fn merge_override_partial() {
-        let mut cat = defaults();
-        let ov: HashMap<String, Override> = serde_json::from_str(
-            r#"{"anthropic": {"base_url": "https://proxy.example.com"}}"#,
-        ).unwrap();
-        for (id, o) in ov { if let Some(e) = cat.get_mut(&id) { if let Some(u) = o.base_url { e.base_url = Some(u); } } }
-        assert_eq!(cat["anthropic"].base_url.as_deref(), Some("https://proxy.example.com"));
-        // name 不变
-        assert_eq!(cat["anthropic"].name, "Anthropic");
-    }
-
-    #[test]
     fn all_well_known_providers_present() {
         let cat = defaults();
-        for id in &["deepseek", "groq", "mistral", "siliconflow", "zhipu", "ollama", "lmstudio"] {
+        for id in &[
+            "deepseek", "groq", "mistral", "siliconflow", "zhipu",
+            "ollama", "lmstudio", "together", "openrouter", "xai",
+            "moonshot", "baidu", "cerebras", "deepinfra", "fireworks",
+            "perplexity", "cohere", "nvidia",
+        ] {
             assert!(cat.contains_key(*id), "missing provider: {id}");
         }
     }

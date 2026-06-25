@@ -95,15 +95,12 @@ pub async fn build_system_prompt(
         s.push_str("\n\n");
     }
 
-    // ── 技能清单 ──
-    let skill_list = skills.list();
-    if !skill_list.is_empty() {
-        s.push_str("# Available Skills\n");
-        s.push_str("Skills are invoked by the user with /<name>. When a skill is invoked, follow its instructions.\n");
-        for sk in &skill_list {
-            s.push_str(&format!("- /{}: {}\n", sk.name, sk.description));
-        }
-        s.push('\n');
+    // ── 技能清单（<available_skills> XML，AI 按需用 skill 工具加载）──
+    let skills_xml = skills.build_available_skills();
+    if !skills_xml.is_empty() {
+        s.push_str("# Skills\n");
+        s.push_str(&skills_xml);
+        s.push_str("\n\n");
     }
 
     // ── Memory（用户在过去会话中记录的持久化信息）──
@@ -113,6 +110,20 @@ pub async fn build_system_prompt(
         s.push_str(&mem_prompt);
         s.push('\n');
     }
+
+    // ── Plan 模式 ──
+    s.push_str("# Plan Mode\n");
+    s.push_str("When the user requests architecture planning or task decomposition, use ");
+    s.push_str("`enter_plan_mode` to enter **plan mode**. This switches to a read-focused permission context ");
+    s.push_str("where you can research, explore, and delegate sub-tasks via `explore`. ");
+    s.push_str("Write your plan to the returned plan file path using `write_file` or `edit_file`.\n\n");
+    s.push_str("Once the plan is written, call `exit_plan_mode` with a summary to submit for user approval. ");
+    s.push_str("Do NOT use `ask` tool or chat to ask 'is this plan OK?' — `exit_plan_mode` handles that.\n\n");
+    s.push_str("Plan mode workflow:\n");
+    s.push_str("1. `enter_plan_mode(task=\"...\")` — enter plan mode, get plan file path\n");
+    s.push_str("2. Research using read_file, glob, grep, explore, etc.\n");
+    s.push_str("3. Write plan to the plan file\n");
+    s.push_str("4. `exit_plan_mode(summary=\"...\")` — submit for approval\n\n");
 
     // ── 行为准则 ──
     s.push_str("# Guidelines\n");

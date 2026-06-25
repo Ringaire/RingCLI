@@ -168,6 +168,27 @@ pub async fn rename_session(session_id: Uuid, title: String) -> std::io::Result<
     Ok(())
 }
 
+pub async fn fork_session(id: Uuid) -> std::io::Result<Session> {
+    let original = load_session(id).await;
+    let session = match original {
+        Some(s) => s,
+        None => return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "session not found")),
+    };
+    let cwd = session.meta.cwd.clone();
+    let model = session.meta.model.clone();
+    let mut new_session = create_session(cwd, model).await;
+    // 立刻落盘 meta + 空 jsonl
+    let sessions_dir = paths::sessions_dir();
+    let meta_path = sessions_dir.join(format!("{}.meta.json", new_session.meta.id));
+    let jsonl_path = sessions_dir.join(format!("{}.jsonl", new_session.meta.id));
+    tokio::fs::write(&meta_path, serde_json::to_vec_pretty(&new_session.meta)?).await?;
+    tokio::fs::write(&jsonl_path, b"").await?;
+    // 复制消息
+    replace_messages(new_session.meta.id, &session.messages).await?;
+    new_session.messages = session.messages;
+    Ok(new_session)
+}
+
 pub async fn delete_session(session_id: Uuid) -> std::io::Result<()> {
     let dir = paths::sessions_dir();
     for ext in &["meta.json", "jsonl", "todos.json"] {

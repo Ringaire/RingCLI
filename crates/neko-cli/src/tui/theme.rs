@@ -29,9 +29,13 @@ pub const INACTIVE: Color = Color::Gray;
 /// 权限模式 → 颜色。
 pub fn mode_color(mode: &str) -> Color {
     match mode {
-        "auto"   => OK,
+        "build"  => OK,
         "edit"   => WARN,
+        "plan"   => Color::Cyan,
         "ask"    => Color::Blue,
+        "agent"  => ERR,
+        // 向后兼容
+        "auto"   => OK,
         "bypass" => ERR,
         _        => MAIN,
     }

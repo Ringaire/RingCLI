@@ -30,15 +30,18 @@ pub struct CommandMeta {
 /// 全部内置命令。顺序即帮助与补全的展示顺序。
 pub const COMMANDS: &[CommandMeta] = &[
     CommandMeta { name: "help",     description: "Show command list",                     arg_hint: None },
-    CommandMeta { name: "mode",     description: "Switch permission mode",                arg_hint: Some("ask|edit|auto|bypass") },
+    CommandMeta { name: "mode",     description: "Switch permission mode",                arg_hint: Some("ask|edit|plan|build|agent") },
     CommandMeta { name: "model",    description: "Show or switch model",                  arg_hint: Some("[provider/model-id]") },
     CommandMeta { name: "connect",  description: "Configure provider connection",         arg_hint: Some("[provider] [key] [url]") },
-    CommandMeta { name: "think",    description: "Control thinking mode (on/off/show/hide/budget)", arg_hint: Some("on|off [budget] | show|hide") },
-    CommandMeta { name: "sessions", description: "List saved sessions",                   arg_hint: None },
-    CommandMeta { name: "resume",   description: "Resume a saved session",                arg_hint: Some("<session-uuid>") },
+    CommandMeta { name: "think",    description: "Control extended thinking (on/off/budget)", arg_hint: Some("on|off [budget]") },
+    CommandMeta { name: "thinking", description: "Toggle reasoning process display (fold/expand)", arg_hint: None },
+    CommandMeta { name: "effort",   description: "Set reasoning effort level",     arg_hint: Some("[low|medium|high|max]") },
+    CommandMeta { name: "resume",   description: "Resume / manage saved sessions",        arg_hint: Some("[sessions|ls|<session-uuid>]") },
     CommandMeta { name: "compact",  description: "Summarize & compact the conversation",  arg_hint: None },
     CommandMeta { name: "clear",    description: "Clear the screen / chat",               arg_hint: None },
+    CommandMeta { name: "new",      description: "Start a new conversation session",      arg_hint: None },
     CommandMeta { name: "memory",   description: "List / search / delete memories",       arg_hint: Some("[search <q> | rm <id>]") },
+    CommandMeta { name: "plan",     description: "Enter plan mode for architecture planning", arg_hint: Some("[description]") },
     CommandMeta { name: "init",     description: "Generate AGENTS.md for this project",  arg_hint: None },
     CommandMeta { name: "quit",     description: "Exit neko",                             arg_hint: None },
 ];
@@ -47,7 +50,6 @@ pub const COMMANDS: &[CommandMeta] = &[
 const ALIASES: &[(&str, &str)] = &[
     ("h", "help"),
     ("?", "help"),
-    ("ls", "sessions"),
     ("cls", "clear"),
     ("mem", "memory"),
     ("exit", "quit"),
@@ -72,6 +74,8 @@ pub enum CommandOutcome {
     RunSkill { prompt: String },
     /// 切换权限模式。
     SwitchMode(ModeName),
+    /// 打开交互式模式选择器（/mode 无参数时）。
+    OpenModePicker,
     /// 切换模型（`provider/model` 或裸 `model`）。
     SwitchModel(String),
     /// 打开交互式模型选择器（/model 无参数时）。
@@ -80,17 +84,26 @@ pub enum CommandOutcome {
     OpenProviderSetup,
     /// `/connect <provider> <key> [url]` 快速配置。
     QuickConnect { provider: String, api_key: Option<String>, base_url: Option<String> },
-    /// 控制 thinking 模式与可见性。
-    /// 字段：(enabled, budget_tokens, show_reasoning)
-    SwitchThinking { enabled: bool, budget: Option<u32>, show: Option<bool> },
+    /// 控制 extended thinking（on/off + budget）。
+    SwitchThinking { enabled: bool, budget: Option<u32> },
+    /// 切换 reasoning 显示（折叠/展开）。
+    ToggleThinkingDisplay,
+    /// 设置 reasoning effort 级别（low/medium/high/max）。
+    SetEffort(String),
     /// 清屏 / 清空对话。
     Clear,
     /// 压缩上下文。
     Compact,
     /// 恢复指定会话。
     Resume(Uuid),
+    /// 新开会话（清空当前对话，从新会话开始）。
+    NewSession,
+    /// 打开会话选择器。
+    OpenSessionPicker,
     /// 退出。
     Quit,
+    /// 进入 plan 模式。
+    EnterPlan(String),
     /// 生成 AGENTS.md：把生成任务作为 prompt 发给 agent。
     InitAgentsMd,
     /// 已就地处理（或需主循环按命令名做 async 收尾，如 /sessions、/memory）。
@@ -125,13 +138,19 @@ pub fn handle(text: &str, skills: &SkillRegistry) -> CommandOutcome {
             print_help(skills);
             CommandOutcome::Handled
         }
-        "mode" => match rest.parse::<ModeName>() {
-            Ok(mode) => CommandOutcome::SwitchMode(mode),
-            Err(_) => {
-                println!("usage: /mode ask|edit|auto|bypass");
-                CommandOutcome::Handled
+        "mode" => {
+            if rest.is_empty() {
+                CommandOutcome::OpenModePicker
+            } else {
+                match rest.parse::<ModeName>() {
+                    Ok(mode) => CommandOutcome::SwitchMode(mode),
+                    Err(_) => {
+                        println!("usage: /mode ask|edit|plan|build|agent");
+                        CommandOutcome::Handled
+                    }
+                }
             }
-        },
+        }
         "model" => {
             if rest.is_empty() {
                 CommandOutcome::OpenModelPicker
@@ -156,58 +175,66 @@ pub fn handle(text: &str, skills: &SkillRegistry) -> CommandOutcome {
             match sub.as_str() {
                 "on" => {
                     let budget: Option<u32> = parts.next().and_then(|s| s.parse().ok());
-                    CommandOutcome::SwitchThinking { enabled: true, budget, show: None }
+                    CommandOutcome::SwitchThinking { enabled: true, budget }
                 }
                 "off" => {
-                    CommandOutcome::SwitchThinking { enabled: false, budget: None, show: None }
-                }
-                "show" => {
-                    CommandOutcome::SwitchThinking { enabled: true, budget: None, show: Some(true) }
-                }
-                "hide" => {
-                    CommandOutcome::SwitchThinking { enabled: true, budget: None, show: Some(false) }
+                    CommandOutcome::SwitchThinking { enabled: false, budget: None }
                 }
                 "" => {
-                    println!("usage: /think on|off [budget] | show|hide");
+                    println!("usage: /think on|off [budget]");
                     CommandOutcome::Handled
                 }
                 _ => {
-                    // 尝试把第一个词当作 budget 数字；否则报错
                     if let Ok(n) = sub.parse::<u32>() {
-                        CommandOutcome::SwitchThinking { enabled: true, budget: Some(n), show: None }
+                        CommandOutcome::SwitchThinking { enabled: true, budget: Some(n) }
                     } else {
-                        println!("usage: /think on|off [budget] | show|hide");
+                        println!("usage: /think on|off [budget]");
                         CommandOutcome::Handled
                     }
                 }
             }
         }
-        // 列表在主循环里异步执行（需读盘）。
-        "sessions" => CommandOutcome::Handled,
+        "thinking" => CommandOutcome::ToggleThinkingDisplay,
+        "effort" => {
+            let level = rest.trim().to_lowercase();
+            match level.as_str() {
+                "low" | "medium" | "high" | "max" | "off" => CommandOutcome::SetEffort(level),
+                "" => {
+                    println!("usage: /effort low|medium|high|max|off");
+                    CommandOutcome::Handled
+                }
+                _ => {
+                    println!("usage: /effort low|medium|high|max|off");
+                    CommandOutcome::Handled
+                }
+            }
+        }
         "resume" => {
-            if rest.is_empty() {
-                // 无参 = 打开交互式会话选择器，同 /sessions
-                CommandOutcome::Handled
+            let sub = rest.to_lowercase();
+            if sub.is_empty() || sub == "sessions" || sub == "ls" {
+                CommandOutcome::OpenSessionPicker
             } else {
                 match Uuid::parse_str(rest) {
                     Ok(id) => CommandOutcome::Resume(id),
                     Err(_) => {
-                        println!("usage: /resume <session-uuid>");
+                        println!("usage: /resume [sessions|ls|<session-uuid>]");
                         CommandOutcome::Handled
                     }
                 }
             }
         },
+        "new" => CommandOutcome::NewSession,
         "clear" => CommandOutcome::Clear,
         "compact" => CommandOutcome::Compact,
         // memory 子命令在主循环里异步执行。
         "memory" => CommandOutcome::Handled,
+        "plan" => CommandOutcome::EnterPlan(rest.to_string()),
         "init" => CommandOutcome::InitAgentsMd,
         "quit" => CommandOutcome::Quit,
         // 其余：尝试作为技能名。
         other => {
             if let Some(skill) = skills.get(other) {
-                let mut prompt = skill.prompt.clone();
+                let mut prompt = skill.content.clone();
                 if !rest.is_empty() {
                     prompt.push_str("\n\nUser arguments: ");
                     prompt.push_str(rest);
@@ -446,27 +473,40 @@ fn msg_text(msg: &neko_core::tools::Message) -> String {
     }).collect::<Vec<_>>().join("\n")
 }
 
-/// 检测消息列表开头是否已有摘要消息，若有则剥离并返回其文本。
+/// 检测消息列表开头是否已有摘要消息对，若有则剥离并返回其摘要文本。
 /// 返回 `(prior_summary, new_messages_slice)`。
 pub fn split_for_compact(messages: &[neko_core::tools::Message]) -> (Option<String>, &[neko_core::tools::Message]) {
+    use neko_core::tools::MessageRole;
     if let Some(first) = messages.first() {
-        let text = msg_text(first);
-        if text.starts_with("[Conversation Summary]") {
-            let prior = text["[Conversation Summary]".len()..].trim().to_string();
-            return (Some(prior), &messages[1..]);
+        if first.role == MessageRole::User
+            && first.content.iter().any(|b| matches!(b, neko_core::tools::ContentBlock::Text { text } if text.starts_with("Please summarize")))
+        {
+            if let Some(second) = messages.get(1) {
+                let text = msg_text(second);
+                if text.starts_with("[Conversation Summary]") {
+                    let prior = text["[Conversation Summary]".len()..].trim().to_string();
+                    return (Some(prior), &messages[2..]);
+                }
+            }
         }
     }
     (None, messages)
 }
 
-/// 构造压缩后的摘要消息，若有历史摘要则以 `---` 分隔拼接。
-pub fn build_compact_message(prior: Option<&str>, new_summary: &str) -> neko_core::tools::Message {
+/// 构造压缩后的摘要消息对（User + Assistant），保证消息序列以 User role 开始。
+/// 若有历史摘要则以 `---` 分隔拼接。
+pub fn build_compact_message(prior: Option<&str>, new_summary: &str) -> Vec<neko_core::tools::Message> {
     use neko_core::tools::{ContentBlock, MessageRole};
     let text = match prior {
         Some(p) => format!("[Conversation Summary]\n{p}\n\n---\n\n{new_summary}"),
         None    => format!("[Conversation Summary]\n{new_summary}"),
     };
-    neko_core::tools::Message::new(MessageRole::Assistant, vec![ContentBlock::Text { text }])
+    vec![
+        neko_core::tools::Message::new(MessageRole::User, vec![ContentBlock::Text {
+            text: "Please summarize the conversation below into a compact briefing using the requested format.".into()
+        }]),
+        neko_core::tools::Message::new(MessageRole::Assistant, vec![ContentBlock::Text { text }]),
+    ]
 }
 
 /// 命令名敲完（已含空格）后的参数提示。

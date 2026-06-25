@@ -12,7 +12,7 @@ use crate::catalog::{self, CatalogEntry, ProviderKind};
 use crate::provider::{build_http_client, DEFAULT_CONNECT_TIMEOUT_SECS};
 use crate::providers::{
     anthropic::AnthropicProvider,
-    claude_code::ClaudeCodeProvider,
+    anthropic::claude_code::ClaudeCodeProvider,
     compatible::CompatibleProvider,
     gemini::GeminiProvider,
     openai::OpenAiProvider,

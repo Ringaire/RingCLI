@@ -7,8 +7,8 @@ pub struct Args {
     /// Initial prompt to send (positional)
     pub prompt: Option<String>,
 
-    /// Permission mode: ask | edit | auto | bypass
-    #[arg(long, default_value = "auto")]
+    /// Permission mode: ask | edit | plan | auto | bypass
+    #[arg(long, default_value = "build")]
     pub mode: String,
 
     /// Print response and exit (non-interactive, useful for pipes)

@@ -13,7 +13,7 @@ use ratatui::{
 
 use neko_providers::ProviderKind;
 
-use crate::tui::theme::{UI, MUTED, ERR};
+use crate::tui::theme::{UI, MUTED, ERR, INACTIVE};
 
 use super::core::scroll_list::{anchor_below, label, pointer, ScrollList};
 
@@ -73,12 +73,18 @@ impl ProviderRow {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SetupStep {
     SelectProvider,
+    /// OpenAI 专属：选择认证方式（ChatGPT OAuth / API Key）。
+    SelectAuthMethod,
     ApiKey,
     CustomName,
     CustomUrl,
     CustomKey,
     FetchingModels,
+    /// OAuth2 浏览器/设备码流程进行中。
+    OAuthInProgress,
     SelectModel,
+    /// 模型列表为空时，手动输入模型 ID。
+    ManualModel,
     Saving,
     Error,
 }
@@ -93,6 +99,10 @@ pub enum SetupAction {
     Fetch,
     /// app.rs 须落盘配置 + 热重载，结果回传 [`ProviderSetupModal::apply_saved`]。
     Commit,
+    /// app.rs 须启动 ChatGPT OAuth2 浏览器登录流程。
+    OAuthBrowser,
+    /// app.rs 须启动 ChatGPT OAuth2 设备码登录流程。
+    OAuthDevice,
 }
 
 // ── 模态 ──────────────────────────────────────────────────────────────────────
@@ -112,6 +122,12 @@ pub struct ProviderSetupModal {
     base_url:    Option<String>,
     default_model: Option<String>,
     api_key:     String,
+
+    /// 手动输入的模型 ID（模型列表为空时）。
+    manual_model: String,
+
+    /// `SelectAuthMethod` 步骤的 cursor（0=browser, 1=device, 2=apikey）。
+    auth_cursor: usize,
 
     /// 模型选择。
     models:      Vec<String>,
@@ -134,6 +150,8 @@ impl ProviderSetupModal {
             base_url:    None,
             default_model: None,
             api_key:     String::new(),
+            manual_model: String::new(),
+            auth_cursor: 0,
             models:      Vec::new(),
             model_list:  ScrollList::new(MODEL_VISIBLE),
             status:      String::new(),
@@ -151,6 +169,9 @@ impl ProviderSetupModal {
 
     /// 最终选定的模型：SelectModel 选中项，否则回退 default_model。
     pub fn chosen_model(&self) -> Option<String> {
+        if !self.manual_model.is_empty() {
+            return Some(self.manual_model.clone());
+        }
         self.models.get(self.model_list.cursor()).cloned().or_else(|| self.default_model.clone())
     }
 
@@ -162,8 +183,9 @@ impl ProviderSetupModal {
     /// 模型列表拉取完成。非空 → 进入选择；空 → 直接落盘（用默认模型）。
     pub fn apply_models(&mut self, models: Vec<String>) -> SetupAction {
         if models.is_empty() {
-            self.step = SetupStep::Saving;
-            SetupAction::Commit
+            self.text.clear();
+            self.step = SetupStep::ManualModel;
+            SetupAction::Stay
         } else {
             self.models = models;
             self.model_list = ScrollList::new(MODEL_VISIBLE);
@@ -186,11 +208,30 @@ impl ProviderSetupModal {
         }
     }
 
+    /// OAuth2 登录结果。成功 → 用 API key 进入模型拉取；失败 → 显示错误。
+    pub fn apply_oauth_result(&mut self, result: Result<String, String>) {
+        match result {
+            Ok(api_key) => {
+                self.api_key = api_key;
+                self.text.clear();
+                self.step = SetupStep::FetchingModels;
+                // app.rs 看到 Fetch 后会构造 probe provider 拉模型
+            }
+            Err(e) => {
+                self.status = e;
+                self.step = SetupStep::Error;
+            }
+        }
+    }
+
     // ── 按键 ─────────────────────────────────────────────────────────────────
 
     pub fn move_up(&mut self) {
         match self.step {
-            SetupStep::SelectProvider => self.prov_list.up(self.providers.len()),
+            SetupStep::SelectProvider => self.prov_list.up(self.filtered_indices().len()),
+            SetupStep::SelectAuthMethod => {
+                if self.auth_cursor > 0 { self.auth_cursor -= 1; }
+            }
             SetupStep::SelectModel    => self.model_list.up(self.models.len()),
             _ => {}
         }
@@ -198,7 +239,10 @@ impl ProviderSetupModal {
 
     pub fn move_down(&mut self) {
         match self.step {
-            SetupStep::SelectProvider => self.prov_list.down(self.providers.len()),
+            SetupStep::SelectProvider => self.prov_list.down(self.filtered_indices().len()),
+            SetupStep::SelectAuthMethod => {
+                if self.auth_cursor < 2 { self.auth_cursor += 1; }
+            }
             SetupStep::SelectModel    => self.model_list.down(self.models.len()),
             _ => {}
         }
@@ -211,6 +255,11 @@ impl ProviderSetupModal {
 
     pub fn backspace(&mut self) {
         if self.is_text_step() { self.text.pop(); }
+    }
+
+    /// 粘贴文本（bracketed paste）。
+    pub fn insert_str(&mut self, s: &str) {
+        if self.is_text_step() { self.text.push_str(s); }
     }
 
     /// Ctrl+U 清空，Ctrl+W 删词。
@@ -230,15 +279,41 @@ impl ProviderSetupModal {
     fn is_text_step(&self) -> bool {
         matches!(
             self.step,
-            SetupStep::ApiKey | SetupStep::CustomName | SetupStep::CustomUrl | SetupStep::CustomKey
+            SetupStep::SelectProvider
+                | SetupStep::ApiKey
+                | SetupStep::CustomName
+                | SetupStep::CustomUrl
+                | SetupStep::CustomKey
+                | SetupStep::ManualModel
         )
+    }
+
+    /// `SelectProvider` 步骤中，根据 `text` 过滤后的 provider 在原始列表中的索引。
+    /// `text` 为空 → 全部。Custom 行始终保留在末尾。
+    fn filtered_indices(&self) -> Vec<usize> {
+        let q = self.text.to_lowercase();
+        if q.is_empty() {
+            return (0..self.providers.len()).collect();
+        }
+        self.providers
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                r.is_custom()
+                    || r.id.to_lowercase().contains(&q)
+                    || r.name.to_lowercase().contains(&q)
+            })
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// Enter：推进状态机。返回 app.rs 须执行的外部动作。
     pub fn confirm(&mut self) -> SetupAction {
         match self.step {
             SetupStep::SelectProvider => {
-                let Some(row) = self.providers.get(self.prov_list.cursor()).cloned() else {
+                let indices = self.filtered_indices();
+                let &orig_idx = indices.get(self.prov_list.cursor()).unwrap_or(&0);
+                let Some(row) = self.providers.get(orig_idx).cloned() else {
                     return SetupAction::Stay;
                 };
                 if row.is_custom() {
@@ -254,7 +329,12 @@ impl ProviderSetupModal {
                     self.base_url      = row.base_url.clone();
                     self.default_model = row.default_model.clone();
                     self.text.clear();
-                    if row.needs_key() {
+                    // OpenAI 专属：进入认证方式子菜单
+                    if row.id == "openai" {
+                        self.auth_cursor = 0;
+                        self.step = SetupStep::SelectAuthMethod;
+                        SetupAction::Stay
+                    } else if row.needs_key() {
                         self.step = SetupStep::ApiKey;
                         SetupAction::Stay
                     } else {
@@ -264,6 +344,24 @@ impl ProviderSetupModal {
                     }
                 }
             }
+            SetupStep::SelectAuthMethod => {
+                match self.auth_cursor {
+                    0 => { // ChatGPT browser
+                        self.step = SetupStep::OAuthInProgress;
+                        SetupAction::OAuthBrowser
+                    }
+                    1 => { // ChatGPT device code
+                        self.step = SetupStep::OAuthInProgress;
+                        SetupAction::OAuthDevice
+                    }
+                    2 => { // API Key
+                        self.step = SetupStep::ApiKey;
+                        SetupAction::Stay
+                    }
+                    _ => SetupAction::Stay,
+                }
+            }
+            SetupStep::OAuthInProgress => SetupAction::Stay,
             SetupStep::ApiKey => {
                 self.api_key = self.text.trim().to_string();
                 self.text.clear();
@@ -296,6 +394,14 @@ impl ProviderSetupModal {
                 self.step = SetupStep::Saving;
                 SetupAction::Commit
             }
+            SetupStep::ManualModel => {
+                let m = self.text.trim().to_string();
+                if m.is_empty() { return SetupAction::Stay; }
+                self.manual_model = m;
+                self.text.clear();
+                self.step = SetupStep::Saving;
+                SetupAction::Commit
+            }
             SetupStep::Error => {
                 // 回到 provider 选择重来
                 self.step = SetupStep::SelectProvider;
@@ -310,7 +416,12 @@ impl ProviderSetupModal {
     pub fn cancel(&mut self) -> SetupAction {
         match self.step {
             SetupStep::SelectProvider => SetupAction::Cancel,
-            SetupStep::ApiKey | SetupStep::CustomName | SetupStep::SelectModel | SetupStep::Error => {
+            SetupStep::SelectAuthMethod => {
+                self.step = SetupStep::SelectProvider;
+                self.text.clear();
+                SetupAction::Stay
+            }
+            SetupStep::ApiKey | SetupStep::CustomName | SetupStep::SelectModel | SetupStep::ManualModel | SetupStep::Error => {
                 self.step = SetupStep::SelectProvider;
                 self.text.clear();
                 SetupAction::Stay
@@ -325,7 +436,7 @@ impl ProviderSetupModal {
                 self.step = SetupStep::CustomUrl;
                 SetupAction::Stay
             }
-            SetupStep::FetchingModels | SetupStep::Saving => SetupAction::Stay,
+            SetupStep::FetchingModels | SetupStep::Saving | SetupStep::OAuthInProgress => SetupAction::Stay,
         }
     }
 
@@ -333,8 +444,14 @@ impl ProviderSetupModal {
 
     pub fn height(&self) -> u16 {
         match self.step {
-            SetupStep::SelectProvider => self.prov_list.body_height(self.providers.len(), 2),
+            SetupStep::SelectProvider => {
+                let len = self.filtered_indices().len();
+                // 标题(1) + 搜索框(1) + 提示(1) + 列表
+                self.prov_list.body_height(len, 3)
+            }
             SetupStep::SelectModel    => self.model_list.body_height(self.models.len(), 2),
+            SetupStep::SelectAuthMethod => 6, // 标题(1) + 3选项(3) + 空行(1) + 提示(1)
+            SetupStep::OAuthInProgress => 3,
             _ => 4,
         }
     }
@@ -348,12 +465,15 @@ impl ProviderSetupModal {
     pub fn render(&self) -> Paragraph<'static> {
         match self.step {
             SetupStep::SelectProvider => self.render_provider_list(),
+            SetupStep::SelectAuthMethod => self.render_auth_method(),
             SetupStep::SelectModel    => self.render_model_list(),
+            SetupStep::ManualModel    => self.render_input("Enter Model", &self.provider_name(), "Model ID", false, "no models fetched — type a model ID  Enter to confirm  Esc to cancel"),
             SetupStep::ApiKey         => self.render_input("Connect", &self.provider_name(), "API Key", true, "Enter to fetch models  Esc to go back"),
             SetupStep::CustomName     => self.render_input("Custom Provider", "step 1 / 3", "Name", false, "Enter to continue  Esc to cancel"),
             SetupStep::CustomUrl      => self.render_input("Custom Provider", "step 2 / 3", "Base URL", false, "Enter to continue  Esc to go back"),
             SetupStep::CustomKey      => self.render_input("Custom Provider", "step 3 / 3", "API Key", true, "Enter to skip / continue  Esc to go back"),
             SetupStep::FetchingModels => Self::render_status("Fetching models…", UI, "please wait"),
+            SetupStep::OAuthInProgress => Self::render_status("OAuth2 in progress…", UI, "complete login in your browser  Esc to cancel"),
             SetupStep::Saving         => Self::render_status("Saving…", UI, ""),
             SetupStep::Error          => Self::render_status(&format!("✗ {}", self.status), ERR, "Enter to retry  Esc to cancel"),
         }
@@ -366,13 +486,78 @@ impl ProviderSetupModal {
         }
     }
 
+    fn render_auth_method(&self) -> Paragraph<'static> {
+        let dim = Style::default().fg(MUTED);
+        let options: &[(&str, &str)] = &[
+            ("ChatGPT Login (browser)",    "OAuth2 PKCE — Pro/Plus subscription"),
+            ("ChatGPT Login (device code)", "Headless — SSH / no-browser"),
+            ("API Key",                     "sk-... direct key input"),
+        ];
+
+        let mut lines: Vec<Line<'static>> = vec![
+            Line::from(vec![
+                Span::styled("Connect OpenAI", Style::default().fg(UI).add_modifier(Modifier::BOLD)),
+                Span::styled("  —  choose authentication", dim),
+            ]),
+        ];
+
+        for (i, (name, desc)) in options.iter().enumerate() {
+            let selected = i == self.auth_cursor;
+            let pointer = if selected { "❯ " } else { "  " };
+            let name_style = if selected {
+                Style::default().fg(UI).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(INACTIVE)
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(pointer, Style::default().fg(UI).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{:<28}", name), name_style),
+                Span::styled(*desc, dim),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "↑↓ navigate  Enter select  Esc back",
+            dim,
+        )));
+
+        Paragraph::new(lines)
+    }
+
     fn render_provider_list(&self) -> Paragraph<'static> {
         let dim = Style::default().fg(MUTED);
+        let indices = self.filtered_indices();
+        let filtered: Vec<&ProviderRow> = indices.iter()
+            .filter_map(|&i| self.providers.get(i))
+            .collect();
+
         let mut lines: Vec<Line<'static>> = vec![
             Line::from(Span::styled("Connect Provider", Style::default().fg(UI).add_modifier(Modifier::BOLD))),
-            Line::from(Span::styled("↑↓ navigate  Enter select  Esc cancel", dim)),
         ];
-        lines.extend(self.prov_list.render_rows(&self.providers, dim, |row, rs| {
+
+        // 搜索框
+        lines.push(Line::from(vec![
+            Span::styled("filter: ", dim),
+            Span::styled(self.text.clone(), Style::default().fg(UI)),
+            Span::styled("▏", Style::default().fg(UI)),
+        ]));
+
+        // 提示行
+        if self.text.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "type to search  •  ↑↓ navigate  Enter select  Esc cancel",
+                dim,
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("{} match(es)  •  ↑↓ navigate  Enter select  Esc cancel", filtered.len()),
+                dim,
+            )));
+        }
+
+        lines.extend(self.prov_list.render_rows(&filtered, dim, |row, rs| {
             Line::from(vec![
                 pointer(rs.selected),
                 label(rs.selected, format!("{:<14}", row.id)),

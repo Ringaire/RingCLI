@@ -1,10 +1,10 @@
-// spawn_agent 工具：主 agent 派生独立子 agent 执行自包含子任务。
+// explore 工具：主 agent 派生独立子 agent 执行自包含子任务。
 //
 // 设计要点（对齐 nekocode-bun 并利用 Rust 结构优势）：
 // - 子 agent 拥有独立 AgentContext（无共享记忆），任务全部信息由 `task` 字段传入
 // - executor 自带 sub_agent_id，所有事件直接打标后流入主 bus（无需 bun 那样的双 bus 转发）
-// - 深度限制：depth+1 < max_depth 时子 agent 仍带（更深的）spawn_agent，可多级编排；
-//   达到叶层则用 SubToolRegistry 显式剥离 spawn_agent，防无限递归
+// - 深度限制：depth+1 < max_depth 时子 agent 仍带（更深的）explore，可多级编排；
+//   达到叶层则用 SubToolRegistry 显式剥离 explore，防无限递归
 // - role 选模：model 显式优先，否则按 role 从 catalog 选，再否则用当前模型
 // - 子 agent 不持久化（persist=false）
 
@@ -31,7 +31,7 @@ use crate::agent::executor::AgentExecutor;
 use crate::agent::permission::PermissionSender;
 use crate::agent::turn::TurnResult;
 
-pub const SPAWN_TOOL_NAME: &str = "spawn_agent";
+pub const SPAWN_TOOL_NAME: &str = "explore";
 const DEFAULT_SUB_MAX_TURNS: usize = 10;
 
 /// 派生子 agent 所需的全部能力（在编排器构建时捕获）。

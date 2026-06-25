@@ -18,7 +18,7 @@ pub use events::{EventBus, NekoEvent};
 pub use permissions::{DefaultPermissionEngine, ModeName, PermissionAction};
 pub use runtime::{McpManager, NekoRuntime};
 pub use session::{
-    append_message, create_session, delete_session, init_dirs, list_sessions,
+    append_message, create_session, delete_session, fork_session, init_dirs, list_sessions,
     load_session, rename_session, replace_messages, Session, SessionMeta,
 };
 pub use session::memory::{

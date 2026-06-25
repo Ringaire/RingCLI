@@ -1,3 +1,15 @@
+/// 该 provider 的 catalog 条目。
+pub fn catalog_entry() -> crate::catalog::CatalogEntry {
+    crate::catalog::CatalogEntry {
+        name: "Google Gemini".into(),
+        kind: crate::catalog::ProviderKind::Gemini,
+        base_url: Some("https://generativelanguage.googleapis.com".into()),
+        api_key_env: Some("GEMINI_API_KEY".into()),
+        default_model: Some("gemini-2.0-flash".into()),
+        extra_body: None,
+    }
+}
+
 use async_trait::async_trait;
 use neko_core::tools::{ContentBlock, Message, MessageRole};
 use reqwest::Client;

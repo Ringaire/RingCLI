@@ -17,7 +17,7 @@ use neko_core::NekoRuntime;
 use neko_providers::provider::Provider;
 use neko_providers::ProviderRegistry;
 
-use crate::agent::build_system_prompt;
+use neko_engine::build_system_prompt;
 use crate::args::Args;
 use crate::mcp_manager::CliMcpManager;
 
@@ -57,7 +57,7 @@ impl BootstrappedRuntime {
     pub async fn rebuild_context(&mut self) {
         let model = self.model.clone();
         self.catalog = build_catalog(&self.config, self.provider.as_deref(), &model).await;
-        let base = crate::agent::build_system_prompt(
+        let base = neko_engine::build_system_prompt(
             self.cwd.as_path(),
             self.tools.as_ref(),
             &self.skills,
@@ -65,7 +65,7 @@ impl BootstrappedRuntime {
             &self.mode.to_string(),
         ).await;
         self.system_prompt =
-            crate::agent::orchestrator::build_orchestrator_prompt(&self.catalog, &model, &base);
+            neko_engine::agent::orchestrator::build_orchestrator_prompt(&self.catalog, &model, &base);
     }
 }
 
@@ -115,11 +115,26 @@ pub async fn bootstrap(args: &Args, session_id: Option<uuid::Uuid>) -> Result<Bo
 
     let tools: Arc<dyn ToolRegistry> = neko_runtime.tools_dyn();
 
-    // ── 7. 技能 ──
+    // ── 7. 技能（内置 → 全局目录 → 项目级 .agents/skills + .neko/skills）──
     let mut skill_registry = SkillRegistry::new();
     neko_skills::load_builtin_skills(&mut skill_registry);
-    let skills_dir = neko_core::session::paths::skills_dir();
-    neko_skills::load_skills_from_dir(&mut skill_registry, &skills_dir).await;
+
+    // 全局目录：~/.local/share/neko/skills/（旧 JSON + 新 SKILL.md 兼容）
+    let global_skills_dir = neko_core::session::paths::skills_dir();
+    neko_skills::load_skills_from_dir(&mut skill_registry, &global_skills_dir).await;
+
+    // 全局目录：~/.config/neko/skills/
+    let config_skills_dir = neko_core::session::paths::config_dir().join("skills");
+    neko_skills::load_skills_from_dir(&mut skill_registry, &config_skills_dir).await;
+
+    // 项目级：.agents/skills/（CC/opencode 兼容）
+    let agents_skills_dir = cwd.join(".agents").join("skills");
+    neko_skills::load_skills_from_dir(&mut skill_registry, &agents_skills_dir).await;
+
+    // 项目级：.neko/skills/
+    let neko_skills_dir = cwd.join(".neko").join("skills");
+    neko_skills::load_skills_from_dir(&mut skill_registry, &neko_skills_dir).await;
+
     let skills = Arc::new(skill_registry);
 
     // ── 8. 会话（新建或恢复）──
@@ -139,7 +154,7 @@ pub async fn bootstrap(args: &Args, session_id: Option<uuid::Uuid>) -> Result<Bo
 
     // ── 10. 系统提示词（基础 + 编排段）──
     let base_prompt = build_system_prompt(&cwd, tools.as_ref(), &skills, &model, &args.mode).await;
-    let system_prompt = crate::agent::orchestrator::build_orchestrator_prompt(&catalog, &model, &base_prompt);
+    let system_prompt = neko_engine::agent::orchestrator::build_orchestrator_prompt(&catalog, &model, &base_prompt);
 
     // ── 11. 配置热重载监听 ──
     let config_watcher = crate::config_watch::spawn_config_watch(

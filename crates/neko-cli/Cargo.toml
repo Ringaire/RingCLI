@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 neko-core      = { workspace = true }
+neko-engine    = { path = "../neko-engine" }
 neko-providers = { workspace = true }
 neko-tools     = { workspace = true }
 neko-mcp       = { workspace = true }
