@@ -40,4 +40,5 @@ pulldown-cmark = "0.13"
 parking_lot    = { workspace = true }
 notify         = { workspace = true }
 axum           = { workspace = true }
+tower-http     = { workspace = true }
 tokio-tungstenite = { workspace = true }
