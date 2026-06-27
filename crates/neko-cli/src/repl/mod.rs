@@ -162,6 +162,49 @@ pub async fn run_plain(mut runtime: BootstrappedRuntime, args: &Args) -> Result<
                     process_user_input(&mut runtime, &mut ctx, prompt, &mut reader).await?;
                 }
             }
+            CommandOutcome::LoopStart { goal, max_turns } => {
+                println!("[⟳ loop started: {} (max {} turns)]", goal, max_turns);
+                let mut ls = neko_core::session::loop_state::LoopState::new(goal.clone(), max_turns);
+                // 第一轮
+                ctx.system = Some(format!("{}\n\n{}", runtime.system_prompt, ls.build_system_prompt_snippet()));
+                process_user_input(&mut runtime, &mut ctx, goal, &mut reader).await?;
+                // 后续轮
+                loop {
+                    ls.advance();
+                    let done = ctx.messages.last()
+                        .map(|m| {
+                            m.content.iter().any(|b| {
+                                if let neko_core::tools::ContentBlock::Text { text } = b {
+                                    text.contains(neko_core::LOOP_DONE_MARKER)
+                                } else { false }
+                            })
+                        }).unwrap_or(false);
+                    if done { println!("[⟳ loop complete ({} turns)]", ls.current_turn); break; }
+                    if ls.is_exhausted() { println!("[⟳ loop exhausted (max {} turns)]", ls.max_turns); break; }
+                    println!("[⟳ loop {}/{}]", ls.current_turn + 1, ls.max_turns);
+                    let prompt = ls.build_continuation_prompt();
+                    ctx.system = Some(format!("{}\n\n{}", runtime.system_prompt, ls.build_system_prompt_snippet()));
+                    process_user_input(&mut runtime, &mut ctx, prompt, &mut reader).await?;
+                }
+            }
+            CommandOutcome::LoopStop => println!("[⟳ loop stopped]"),
+            CommandOutcome::LoopStatus => println!("[⟳ loop status — TUI only]"),
+            CommandOutcome::Reload => {
+                let cwd = runtime.cwd.clone();
+                let resolved = neko_core::load_config(Some(&cwd)).await;
+                let boot = neko_providers::build_registry(&resolved);
+                runtime.config = resolved;
+                runtime.provider_registry = std::sync::Arc::new(boot.registry);
+                runtime.rebuild_context().await;
+                let mut skills = neko_core::skills::SkillRegistry::new();
+                neko_skills::load_builtin_skills(&mut skills);
+                let global_dir = neko_core::session::paths::skills_dir();
+                neko_skills::load_skills_from_dir(&mut skills, &global_dir).await;
+                neko_skills::load_skills_from_dir(&mut skills, &cwd.join(".agents").join("skills")).await;
+                neko_skills::load_skills_from_dir(&mut skills, &cwd.join(".neko").join("skills")).await;
+                runtime.skills = std::sync::Arc::new(skills);
+                println!("[⟳ reloaded: config + providers + skills]");
+            }
             CommandOutcome::Handled => {
                 let trimmed = input.trim();
                 if let Some(rest) = trimmed.strip_prefix("/memory").or_else(|| trimmed.strip_prefix("/mem")) {

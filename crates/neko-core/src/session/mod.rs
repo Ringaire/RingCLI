@@ -1,6 +1,7 @@
 pub mod memory;
 pub mod paths;
 pub mod todos;
+pub mod loop_state;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

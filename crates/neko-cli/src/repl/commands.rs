@@ -43,6 +43,8 @@ pub const COMMANDS: &[CommandMeta] = &[
     CommandMeta { name: "memory",   description: "List / search / delete memories",       arg_hint: Some("[search <q> | rm <id>]") },
     CommandMeta { name: "plan",     description: "Enter plan mode for architecture planning", arg_hint: Some("[description]") },
     CommandMeta { name: "init",     description: "Generate AGENTS.md for this project",  arg_hint: None },
+    CommandMeta { name: "loop",     description: "Autonomous loop — agent works toward a goal", arg_hint: Some("<goal> [max_turns] | stop | status") },
+    CommandMeta { name: "reload",   description: "Reload config + providers + skills",       arg_hint: None },
     CommandMeta { name: "quit",     description: "Exit neko",                             arg_hint: None },
 ];
 
@@ -106,6 +108,14 @@ pub enum CommandOutcome {
     EnterPlan(String),
     /// 生成 AGENTS.md：把生成任务作为 prompt 发给 agent。
     InitAgentsMd,
+    /// 启动自主循环模式。
+    LoopStart { goal: String, max_turns: u32 },
+    /// 停止循环。
+    LoopStop,
+    /// 查看循环状态。
+    LoopStatus,
+    /// 热重载配置 + provider + skill。
+    Reload,
     /// 已就地处理（或需主循环按命令名做 async 收尾，如 /sessions、/memory）。
     Handled,
 }
@@ -230,7 +240,40 @@ pub fn handle(text: &str, skills: &SkillRegistry) -> CommandOutcome {
         "memory" => CommandOutcome::Handled,
         "plan" => CommandOutcome::EnterPlan(rest.to_string()),
         "init" => CommandOutcome::InitAgentsMd,
+        "loop" => {
+            let rest = rest.trim();
+            if rest.is_empty() {
+                println!("usage: /loop <goal> [max_turns]");
+                println!("       /loop stop");
+                println!("       /loop status");
+                return CommandOutcome::Handled;
+            }
+            if rest == "stop" || rest == "cancel" {
+                return CommandOutcome::LoopStop;
+            }
+            if rest == "status" {
+                return CommandOutcome::LoopStatus;
+            }
+            // 最后一个 token 是 1-50 的纯数字时作为 max_turns
+            let max_cap = neko_core::session::loop_state::MAX_LOOP_TURNS;
+            let (goal, max_turns) = {
+                let mut parts = rest.rsplitn(2, ' ');
+                let last = parts.next().unwrap_or("");
+                if let Ok(n) = last.parse::<u32>() {
+                    if n >= 1 && n <= max_cap {
+                        let g = parts.next().unwrap_or("").trim().to_string();
+                        if !g.is_empty() { (g, n) } else { (rest.to_string(), 20) }
+                    } else {
+                        (rest.to_string(), 20)
+                    }
+                } else {
+                    (rest.to_string(), 20)
+                }
+            };
+            CommandOutcome::LoopStart { goal, max_turns }
+        }
         "quit" => CommandOutcome::Quit,
+        "reload" => CommandOutcome::Reload,
         // 其余：尝试作为技能名。
         other => {
             if let Some(skill) = skills.get(other) {

@@ -96,6 +96,8 @@ struct AppState {
     think_budget:     u32,
     /// reasoning effort 级别（low/medium/high/max），None = 不发送
     effort:           Option<String>,
+    /// 自主循环状态（/loop 命令）
+    loop_state:       Option<neko_core::session::loop_state::LoopState>,
     /// 运行时用户输入的消息队列（Agent 完成后续按顺序消费）
     queued_messages:  Vec<String>,
     /// Ctrl+C 首次按下后进入 pending 态，再次按下才退出
@@ -149,6 +151,7 @@ impl AppState {
             think_show:       true,
             think_budget:     DEFAULT_THINKING_BUDGET,
             effort:           None,
+            loop_state:       None,
             queued_messages:  Vec::new(),
             exit_pending:     false,
             active_sub_agent: None,
@@ -377,6 +380,24 @@ async fn run_loop<B: ratatui::backend::Backend>(
                 if !state.queued_messages.is_empty() {
                     let text = state.queued_messages.remove(0);
                     start_turn(runtime, &ctx, &mut state, &perm_tx, &done_tx, text).await;
+                } else if let Some(ls) = &mut state.loop_state {
+                    // 自主循环：检查完成 → 自动继续
+                    ls.advance();
+                    let done = state.chat.bubbles.last()
+                        .filter(|b| b.kind == super::widgets::chat::BubbleKind::Assistant)
+                        .map(|b| b.content.contains(neko_core::LOOP_DONE_MARKER))
+                        .unwrap_or(false);
+                    if done {
+                        state.chat.add_system(format!("⟳ loop complete ({} turns)", ls.current_turn));
+                        state.loop_state = None;
+                    } else if ls.is_exhausted() {
+                        state.chat.add_system(format!("⟳ loop exhausted (max {} turns)", ls.max_turns));
+                        state.loop_state = None;
+                    } else {
+                        let prompt = ls.build_continuation_prompt();
+                        state.chat.add_system(format!("⟳ loop {}/{}", ls.current_turn + 1, ls.max_turns));
+                        start_turn(runtime, &ctx, &mut state, &perm_tx, &done_tx, prompt).await;
+                    }
                 }
             }
             Some(picker) = picker_rx.recv() => {
@@ -1078,9 +1099,18 @@ async fn handle_key(
                 if let Some(sig) = &state.signal {
                     sig.cancel();
                 }
+                // 中断循环
+                if state.loop_state.is_some() {
+                    state.loop_state = None;
+                    state.chat.add_system("⟳ loop cancelled");
+                }
             } else if !state.suggestions.is_empty() {
                 // 关闭补全：清空当前 `/` 输入
                 state.input.clear();
+            } else if state.loop_state.is_some() {
+                // 空闲时取消循环
+                state.loop_state = None;
+                state.chat.add_system("⟳ loop cancelled");
             }
         }
         KeyCode::Enter if alt => {
@@ -1473,6 +1503,69 @@ async fn handle_command(
             state.chat.add_system("generating AGENTS.md…");
             CmdResult::Send(prompt)
         }
+        CommandOutcome::LoopStart { goal, max_turns } => {
+            let ls = neko_core::session::loop_state::LoopState::new(goal.clone(), max_turns);
+            state.chat.add_system(format!(
+                "⟳ loop started: {} (max {} turns — esc to stop)",
+                goal, max_turns
+            ));
+            state.loop_state = Some(ls);
+            // goal 作为第一轮 prompt，start_turn 会自动追加 loop snippet
+            CmdResult::Send(goal)
+        }
+        CommandOutcome::LoopStop => {
+            if let Some(ls) = state.loop_state.take() {
+                state.chat.add_system(format!(
+                    "⟳ loop stopped (turn {}/{})",
+                    ls.current_turn, ls.max_turns
+                ));
+            } else {
+                state.chat.add_system("no active loop");
+            }
+            CmdResult::Handled
+        }
+        CommandOutcome::LoopStatus => {
+            if let Some(ls) = &state.loop_state {
+                state.chat.add_system(format!(
+                    "⟳ loop: turn {}/{}, goal: {}",
+                    ls.current_turn, ls.max_turns, ls.goal
+                ));
+            } else {
+                state.chat.add_system("no active loop");
+            }
+            CmdResult::Handled
+        }
+        CommandOutcome::Reload => {
+            let cwd = std::path::PathBuf::from(&state.cwd);
+            // 1. 重载配置
+            let resolved = neko_core::load_config(Some(&cwd)).await;
+            let provider_count = resolved.providers.len();
+            // 2. 重建 provider 注册表
+            let boot = neko_providers::build_registry(&resolved);
+            let new_registry = std::sync::Arc::new(boot.registry);
+            // 3. 保持当前 provider（如果还在注册表中）
+            let current_pid = runtime.provider.as_ref().map(|p| p.id().to_string());
+            runtime.provider_registry = new_registry;
+            if let Some(pid) = current_pid {
+                runtime.provider = runtime.provider_registry.get(&pid);
+            }
+            // 4. 更新配置 + 重建 catalog + system prompt
+            runtime.config = resolved;
+            runtime.rebuild_context().await;
+            // 5. 重载 skills
+            let mut skills = neko_core::skills::SkillRegistry::new();
+            neko_skills::load_builtin_skills(&mut skills);
+            let global_dir = neko_core::session::paths::skills_dir();
+            neko_skills::load_skills_from_dir(&mut skills, &global_dir).await;
+            neko_skills::load_skills_from_dir(&mut skills, &cwd.join(".agents").join("skills")).await;
+            neko_skills::load_skills_from_dir(&mut skills, &cwd.join(".neko").join("skills")).await;
+            let skill_count = skills.list().len();
+            runtime.skills = std::sync::Arc::new(skills);
+            state.chat.add_system(format!(
+                "⟳ reloaded: {provider_count} provider(s), {skill_count} skill(s)"
+            ));
+            CmdResult::Handled
+        }
         CommandOutcome::Handled => {
             let trimmed = text.trim();
             if let Some(rest) = trimmed.strip_prefix("/memory").or_else(|| trimmed.strip_prefix("/mem")) {
@@ -1587,8 +1680,15 @@ async fn start_turn(
 
     let ctx2 = ctx.clone();
     let done2 = done_tx.clone();
+    // 构建 system prompt（循环模式追加 loop snippet）
+    let sys_prompt = if let Some(ls) = &state.loop_state {
+        format!("{}\n\n{}", runtime.system_prompt, ls.build_system_prompt_snippet())
+    } else {
+        runtime.system_prompt.clone()
+    };
     let handle = tokio::spawn(async move {
         let mut guard = ctx2.lock().await;
+        guard.system = Some(sys_prompt);
         executor.run(&mut guard, signal).await
     });
     tokio::spawn(async move {
@@ -1901,6 +2001,9 @@ fn render_hint(state: &AppState) -> ratatui::widgets::Paragraph<'static> {
     let hint = if let Some(id) = state.active_sub_agent {
         // 子 agent 视图
         format!("⟳ sub-agent {} · ↓ cycle · Esc back to main", &id.to_string()[..8])
+    } else if let Some(ls) = &state.loop_state {
+        // 循环模式
+        format!("⟳ loop {}/{} · {} · esc to stop", ls.current_turn, ls.max_turns, ls.goal)
     } else if state.is_running {
         if !sub_ids.is_empty() {
             format!("{} agent(s) active · ↓ to view · esc to interrupt", sub_ids.len())
@@ -1915,7 +2018,7 @@ fn render_hint(state: &AppState) -> ratatui::widgets::Paragraph<'static> {
         "? help · Tab mode · / commands · @ files".to_string()
     };
 
-    let style = if state.active_sub_agent.is_some() { accent } else { dim };
+    let style = if state.active_sub_agent.is_some() || state.loop_state.is_some() { accent } else { dim };
     ratatui::widgets::Paragraph::new(ratatui::text::Line::from(
         ratatui::text::Span::styled(hint, style),
     ))

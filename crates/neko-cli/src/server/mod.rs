@@ -57,6 +57,7 @@ pub async fn serve(addr: &str) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/models", get(list_models))
+        .route("/v1/providers", get(list_providers))
         .route("/v1/chat", post(chat))
         .route("/v1/chat/stream", post(chat_stream))
         .route("/v1/sessions", get(list_sessions))
@@ -146,6 +147,20 @@ async fn list_models(
         })
         .collect();
     Json(serde_json::json!({ "object": "list", "models": models }))
+}
+
+async fn list_providers(
+    State(state): State<Arc<ServerState>>,
+) -> impl IntoResponse {
+    let active = state.provider.as_ref().map(|p| {
+        serde_json::json!({
+            "id": p.id(),
+            "name": p.display_name(),
+            "default_model": p.default_model(),
+            "active_model": state.model,
+        })
+    });
+    Json(serde_json::json!({ "active": active }))
 }
 
 async fn chat(
@@ -311,6 +326,13 @@ async fn chat_stream(
                         }
                         NekoEvent::AgentTextDone { full, .. } => {
                             Some(format!("{}\n", serde_json::json!({ "type": "text_done", "full": full })))
+                        }
+                        NekoEvent::AgentToolCall { call_id, tool_name, input, .. } |
+                        NekoEvent::ToolStart { call_id, tool_name, input, .. } => {
+                            Some(format!("{}\n", serde_json::json!({ "type": "tool_start", "call_id": call_id, "tool": tool_name, "input": input })))
+                        }
+                        NekoEvent::ToolEnd { call_id, tool_name, ok, duration_ms, .. } => {
+                            Some(format!("{}\n", serde_json::json!({ "type": "tool_end", "call_id": call_id, "tool": tool_name, "ok": ok, "duration_ms": duration_ms })))
                         }
                         NekoEvent::AgentDone { stop_reason, .. } => {
                             let l = format!("{}\n", serde_json::json!({ "type": "done", "stop_reason": stop_reason }));

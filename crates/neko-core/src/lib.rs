@@ -21,6 +21,7 @@ pub use session::{
     append_message, create_session, delete_session, fork_session, init_dirs, list_sessions,
     load_session, rename_session, replace_messages, Session, SessionMeta,
 };
+pub use session::loop_state::{LoopState, LOOP_DONE_MARKER, MAX_LOOP_TURNS};
 pub use session::memory::{
     build_memory_prompt, delete_memory, list_memory, save_memory, search_memory,
     MemoryEntry, MemoryType,
