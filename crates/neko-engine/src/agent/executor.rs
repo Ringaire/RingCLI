@@ -52,6 +52,8 @@ pub struct AgentExecutor {
     pub max_output_tokens: u32,
     /// reasoning effort 级别（low/medium/high/max）。
     pub reasoning_effort: Option<String>,
+    /// 后台子 Agent 完成结果池（task_id → output）。
+    pub bg_results: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<uuid::Uuid, String>>>,
 }
 
 impl AgentExecutor {
@@ -79,6 +81,7 @@ impl AgentExecutor {
             thinking_budget:    None,
             max_output_tokens:  DEFAULT_MAX_OUTPUT_TOKENS,
             reasoning_effort:   None,
+            bg_results: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -109,6 +112,7 @@ impl AgentExecutor {
             thinking_budget:    None,
             max_output_tokens:  DEFAULT_MAX_OUTPUT_TOKENS,
             reasoning_effort:   None,
+            bg_results: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -119,6 +123,21 @@ impl AgentExecutor {
     ) -> TurnResult {
         for turn in 0..self.max_turns {
             debug!(turn, sub_agent = ?self.sub_agent_id, "agent turn start");
+
+            // 每轮开头：检查后台子 Agent 完成结果，注入上下文
+            let completed: Vec<(uuid::Uuid, String)> = {
+                let mut pool = self.bg_results.lock().await;
+                pool.drain().collect()
+            };
+            for (task_id, output) in completed {
+                let msg = format!(
+                    "[Background sub-agent {} completed]\n\n{}",
+                    &task_id.to_string()[..8],
+                    output,
+                );
+                ctx.add_message(Message::user_text(&msg));
+                debug!(%task_id, "injected bg sub-agent result");
+            }
 
             let result = self.do_turn(ctx, signal.clone()).await;
             match result {

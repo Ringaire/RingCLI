@@ -33,6 +33,9 @@ pub fn build_executor(
     provider:         Arc<dyn Provider>,
     perm_tx:          Option<PermissionSender>,
 ) -> AgentExecutor {
+    let bg_results: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<uuid::Uuid, String>>> =
+        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+
     let spawn = SpawnAgentTool {
         provider:      provider.clone(),
         base_tools:    tools.clone(),
@@ -43,6 +46,7 @@ pub fn build_executor(
         current_model: current_model.clone(),
         depth:         0,
         max_depth:     DEFAULT_MAX_DEPTH,
+        bg_results:    bg_results.clone(),
     };
 
     let enter_plan = EnterPlanModeTool {
@@ -68,6 +72,7 @@ pub fn build_executor(
         perm_tx,
     );
     exec.max_output_tokens = max_tokens.clamp(1, u32::MAX as u64) as u32;
+    exec.bg_results = bg_results;
     exec
 }
 

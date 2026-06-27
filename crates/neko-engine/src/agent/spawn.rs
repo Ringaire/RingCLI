@@ -46,6 +46,8 @@ pub struct SpawnAgentTool {
     pub current_model: String,
     pub depth:         usize,
     pub max_depth:     usize,
+    /// 后台子 Agent 完成结果池（task_id → output）。
+    pub bg_results:    Arc<tokio::sync::Mutex<std::collections::HashMap<Uuid, String>>>,
 }
 
 impl SpawnAgentTool {
@@ -128,6 +130,11 @@ impl Tool for SpawnAgentTool {
                     "description": "Maximum agentic turns (default 10)",
                     "minimum": 1,
                     "maximum": 30
+                },
+                "bg": {
+                    "type": "boolean",
+                    "description": "Run in background (non-blocking). Returns task_id immediately. Results auto-injected into your context when complete. Use for parallel sub-tasks.",
+                    "default": false
                 }
             },
             "required": ["task"]
@@ -186,6 +193,42 @@ impl Tool for SpawnAgentTool {
         );
 
         let started = std::time::Instant::now();
+
+        // bg=true：后台并行运行，立即返回 task_id
+        let bg = input.get("bg").and_then(|v| v.as_bool()).unwrap_or(false);
+        if bg {
+            let bg_results = self.bg_results.clone();
+            let task_id = sub_agent_id;
+            let model_bg = model.clone();
+            let signal = ctx.signal.clone();
+            let bus = self.bus.clone();
+            let session_id = ctx.session_id;
+
+            tokio::spawn(async move {
+                let run_started = std::time::Instant::now();
+                let _ = sub_executor.run(&mut sub_ctx, signal).await;
+                let elapsed = run_started.elapsed().as_secs_f64();
+                let output = collect_assistant_text(&sub_ctx.messages);
+                let tool_count = count_tool_uses(&sub_ctx.messages);
+                let output = if output.trim().is_empty() {
+                    "(sub-agent completed with no text output)".to_string()
+                } else {
+                    format!("[model={} · {} tool calls · {:.1}s]\n\n{}", model_bg, tool_count, elapsed, output)
+                };
+                bg_results.lock().await.insert(task_id, output);
+                bus.emit(NekoEvent::AgentDone { session_id, sub_agent_id: Some(task_id), stop_reason: "bg_complete".into() });
+                debug!(%task_id, "bg sub-agent completed");
+            });
+
+            return ToolResult::ok_text(format!(
+                "Background task {} dispatched (model={}). \
+                 Results will be injected into the next turn when complete. \
+                 Continue your work — don't wait.",
+                &sub_agent_id.to_string()[..8], model,
+            ));
+        }
+
+        // bg=false（默认）：同步阻塞运行
         let result = sub_executor.run(&mut sub_ctx, ctx.signal.clone()).await;
         let elapsed = started.elapsed().as_secs_f64();
 
