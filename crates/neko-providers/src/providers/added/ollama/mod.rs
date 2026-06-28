@@ -71,7 +71,7 @@ fn convert_messages(msgs: &[Message]) -> Value {
                                 }
                             }));
                         }
-                        ContentBlock::ToolResult { .. } => {}
+                        ContentBlock::ToolResult { .. } | ContentBlock::Image { .. } => {}
                     }
                 }
                 let content_val = if text_parts.is_empty() {

@@ -28,6 +28,11 @@ pub enum ContentBlock {
         #[serde(rename = "isError", default)]
         is_error: bool,
     },
+    /// 图片块（base64 编码）。
+    Image {
+        media_type: String,
+        data: String,
+    },
 }
 
 // ── 消息角色 ─────────────────────────────────────────────────────────────────
@@ -42,12 +47,31 @@ pub enum MessageRole {
 
 // ── 消息 ─────────────────────────────────────────────────────────────────────
 
+/// token 用量。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub input_tokens:       u64,
+    #[serde(default)]
+    pub output_tokens:      u64,
+    #[serde(default)]
+    pub cache_read_tokens:  u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub id: Uuid,
     pub role: MessageRole,
     pub content: Vec<ContentBlock>,
     pub ts: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model:       Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage:       Option<Usage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
 }
 
 impl Message {
@@ -57,6 +81,9 @@ impl Message {
             role,
             content,
             ts: chrono::Utc::now().timestamp_millis(),
+            model: None,
+            usage: None,
+            stop_reason: None,
         }
     }
 

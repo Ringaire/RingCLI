@@ -29,6 +29,6 @@ pub use session::memory::{
 pub use session::todos::{load_todo_summary, save_todo_summary, TodoSummary};
 pub use skills::{Skill, SkillRegistry, SkillSource};
 pub use tools::{
-    AugmentedToolRegistry, ContentBlock, DefaultToolRegistry, Message, MessageRole,
+    AugmentedToolRegistry, ContentBlock, DefaultToolRegistry, Message, MessageRole, Usage,
     SubToolRegistry, ToolContext, ToolRegistry, ToolRegistryExt, ToolResult,
 };

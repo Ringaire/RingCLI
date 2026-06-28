@@ -154,9 +154,13 @@ impl AgentExecutor {
             sub_agent_id: self.sub_agent_id,
         });
 
+        // prune：截断老的 tool_result，省 token（只影响发给 LLM 的消息，不改原始序列）
+        let mut messages_for_llm = ctx.messages.clone();
+        prune_tool_results(&mut messages_for_llm);
+
         let req = ChatRequest {
             model:         ctx.model.clone(),
-            messages:      ctx.messages.clone(),
+            messages:      messages_for_llm,
             system:        ctx.system.clone(),
             tools:         self.tools.list().iter().map(|t| neko_providers::provider::ToolDef {
                 name:         t.name().to_string(),
@@ -275,7 +279,15 @@ impl AgentExecutor {
             });
         }
 
-        let assistant_msg = Message::new(MessageRole::Assistant, content_blocks);
+        let mut assistant_msg = Message::new(MessageRole::Assistant, content_blocks);
+        assistant_msg.model = Some(ctx.model.clone());
+        assistant_msg.stop_reason = Some(
+            serde_json::to_value(&stop_reason)
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| format!("{:?}", stop_reason)),
+        );
+        // 从 ContextUpdate 事件中的累积用量取差值作为本次用量（近似）
         ctx.add_message(assistant_msg.clone());
         if self.persist {
             session::append_message(self.session_id, assistant_msg).await.ok();
@@ -585,6 +597,33 @@ fn is_outside_cwd(tool_name: &str, input: &serde_json::Value, cwd: &std::path::P
     match (resolved.canonicalize(), cwd.canonicalize()) {
         (Ok(canon), Ok(cwd_canon)) => !canon.starts_with(&cwd_canon),
         _ => false,
+    }
+}
+
+/// Prune：截断老的 tool_result 内容，减少发给 LLM 的 token 量。
+///
+/// 保留最近 `KEEP_RECENT` 条消息的 tool_result 完整，
+/// 更早的 tool_result 截断到 `TRUNCATE_TO` 字符。
+/// 只修改传入的 messages（通常是 clone），不影响原始消息序列。
+fn prune_tool_results(messages: &mut [Message]) {
+    const KEEP_RECENT: usize = 12;
+    const TRUNCATE_TO: usize = 500;
+
+    let cutoff = messages.len().saturating_sub(KEEP_RECENT);
+    for msg in messages[..cutoff].iter_mut() {
+        for block in msg.content.iter_mut() {
+            if let ContentBlock::ToolResult { tool_result, .. } = block {
+                let s = tool_result.to_string();
+                if s.len() > TRUNCATE_TO * 2 {
+                    let truncated = format!(
+                        "{}\n...[truncated — {} chars removed]",
+                        &s[..TRUNCATE_TO.min(s.len())],
+                        s.len() - TRUNCATE_TO,
+                    );
+                    *tool_result = serde_json::Value::String(truncated);
+                }
+            }
+        }
     }
 }
 

@@ -137,6 +137,14 @@ fn convert_messages(msgs: &[Message]) -> Value {
                     "content": tool_result.to_string(),
                     "is_error": is_error,
                 }),
+                ContentBlock::Image { media_type, data } => json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": data,
+                    },
+                }),
             })
             .collect();
         out.push(json!({ "role": role, "content": content }));
