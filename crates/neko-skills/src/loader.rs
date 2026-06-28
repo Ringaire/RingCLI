@@ -108,7 +108,7 @@ pub fn load_builtin_skills(registry: &mut SkillRegistry) {
     }
 }
 
-/// 从目录加载 skill：扫描 `*/SKILL.md`（Markdown+frontmatter）和 `*.json`（旧格式）。
+/// 从目录加载 skill：扫描 `*/SKILL.md`（Markdown+frontmatter）和 `*.md`（同格式）和 `*.json`（旧格式）。
 pub async fn load_skills_from_dir(registry: &mut SkillRegistry, dir: &Path) {
     let mut rd = match tokio::fs::read_dir(dir).await {
         Ok(r) => r,
@@ -127,8 +127,12 @@ pub async fn load_skills_from_dir(registry: &mut SkillRegistry, dir: &Path) {
             continue;
         }
 
+        // .md 文件：带 frontmatter 的 skill（如 engineering/*.md）
+        if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            load_skill_md(registry, &path).await;
+        }
         // .json 文件：旧格式兼容
-        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+        else if path.extension().and_then(|e| e.to_str()) == Some("json") {
             load_skill_json(registry, &path).await;
         }
     }
@@ -141,14 +145,22 @@ async fn load_skill_md(registry: &mut SkillRegistry, path: &Path) {
     };
     let (fm, body) = parse_skill_md(&raw);
 
-    // name：frontmatter > 文件名（父目录名）
-    let name = fm.name.unwrap_or_else(|| {
-        path.parent()
-            .and_then(|p| p.file_name())
+    // name：SKILL.md 用 frontmatter/父目录名；普通 .md 文件用文件名（去扩展名）
+    let is_skill_md = path.file_name().and_then(|n| n.to_str()) == Some("SKILL.md");
+    let name = if is_skill_md {
+        fm.name.unwrap_or_else(|| {
+            path.parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string()
+        })
+    } else {
+        path.file_stem()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
             .to_string()
-    });
+    };
 
     // 无 description 的 skill 不注册（AI 看不到它就无法匹配）
     let Some(description) = fm.description else {
