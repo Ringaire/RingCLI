@@ -23,8 +23,8 @@ pub struct Args {
     #[arg(short = 'c', long)]
     pub r#continue: bool,
 
-    /// Resume a conversation by session UUID, or open picker with optional search
-    #[arg(short = 'r', long)]
+    /// Resume a conversation by session UUID, title search, or open picker if no value given
+    #[arg(short = 'r', long, value_name = "SESSION", num_args = 0..=1, default_missing_value = "")]
     pub resume: Option<String>,
 
     /// List saved sessions

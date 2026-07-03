@@ -55,12 +55,20 @@ async fn main() -> Result<()> {
     }
 
     if let Some(resume_ref) = &args.resume {
+        // --resume with no argument → show session list
+        if resume_ref.is_empty() {
+            return repl::cmd::list_sessions().await;
+        }
+
+        // --resume <uuid> → resume directly
         if let Ok(id) = resume_ref.parse::<uuid::Uuid>() {
             if args.print || args.no_tui {
                 return repl::run(Some(id), &args).await;
             }
             return repl::run(Some(id), &args).await;
         }
+
+        // --resume <title> → fuzzy match by title
         let sessions = neko_core::session::list_sessions().await;
         let lower = resume_ref.to_lowercase();
         let matched = sessions.into_iter().find(|s| {
