@@ -4,7 +4,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use uuid::Uuid;
 
-use neko_core::events::{BashStream, EventBus, NekoEvent};
+use neko_core::events::{EventBus, NekoEvent};
 use neko_core::permissions::{AccessCheck, DefaultPermissionEngine, PermissionAction};
 use neko_core::session;
 use neko_core::tools::{ContentBlock, Message, MessageRole, ToolContext, ToolRegistry};
@@ -435,20 +435,8 @@ impl AgentExecutor {
                     call_id: rc.call_id.clone(), tool_name: rc.tool_name.clone(),
                     input: rc.input.clone(),
                 });
-                let emit_bus = bus.clone();
-                let emit_cid = rc.call_id.clone();
                 let ctx = ToolContext {
                     cwd, session_id, signal: sig,
-                    emit: Arc::new(move |key: String, value: serde_json::Value| {
-                        if key == "bash_stdout" || key == "bash_stderr" {
-                            let data = value.as_str().unwrap_or_default().to_string();
-                            let stream = if key == "bash_stdout" { BashStream::Stdout } else { BashStream::Stderr };
-                            emit_bus.emit(NekoEvent::BashOutput {
-                                session_id, sub_agent_id: sub_id,
-                                call_id: emit_cid.clone(), stream, data,
-                            });
-                        }
-                    }),
                     env: std::collections::HashMap::new(),
                 };
                 let res = tool.execute(rc.input.clone(), &ctx).await;
@@ -482,28 +470,11 @@ impl AgentExecutor {
                 tool_name:    rc.tool_name.clone(),
                 input:        rc.input.clone(),
             });
-            let emit_bus     = self.bus.clone();
-            let emit_session = self.session_id;
-            let emit_sub     = self.sub_agent_id;
-            let emit_call_id = rc.call_id.clone();
             let tool_ctx = ToolContext {
                 cwd:        self.cwd.clone(),
                 session_id: self.session_id,
                 signal:     signal.clone(),
-                emit:       Arc::new(move |key: String, value: serde_json::Value| {
-                    if key == "bash_stdout" || key == "bash_stderr" {
-                        let data = value.as_str().unwrap_or_default().to_string();
-                        let stream = if key == "bash_stdout" { BashStream::Stdout } else { BashStream::Stderr };
-                        emit_bus.emit(NekoEvent::BashOutput {
-                            session_id:   emit_session,
-                            sub_agent_id: emit_sub,
-                            call_id:      emit_call_id.clone(),
-                            stream,
-                            data,
-                        });
-                    }
-                }),
-                env: std::collections::HashMap::new(),
+                env:        std::collections::HashMap::new(),
             };
             let result = tool.execute(rc.input.clone(), &tool_ctx).await;
             let duration_ms = (chrono::Utc::now().timestamp_millis() - start) as u64;

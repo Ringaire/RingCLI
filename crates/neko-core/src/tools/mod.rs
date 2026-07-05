@@ -164,7 +164,6 @@ pub struct ToolContext {
     pub cwd: std::path::PathBuf,
     pub session_id: Uuid,
     pub signal: tokio_util::sync::CancellationToken,
-    pub emit: Arc<dyn Fn(String, serde_json::Value) + Send + Sync>,
     pub env: HashMap<String, String>,
 }
 
