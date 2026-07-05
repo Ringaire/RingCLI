@@ -1,7 +1,8 @@
 [package]
 name = "neko-engine"
-version = "0.1.0"
-edition = "2021"
+description = "NekoCode 执行引擎：Agent turn 循环、工具调度、会话管理"
+version.workspace = true
+edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
@@ -16,11 +17,10 @@ chrono       = { workspace = true }
 async-trait  = { workspace = true }
 anyhow       = { workspace = true }
 notify       = { workspace = true }
-once_cell    = { workspace = true }
 dirs         = { workspace = true }
 
-neko-core      = { path = "../neko-core" }
-neko-providers = { path = "../neko-providers" }
-neko-tools     = { path = "../neko-tools" }
-neko-skills    = { path = "../neko-skills" }
-neko-mcp       = { path = "../neko-mcp" }
+neko-core      = { workspace = true }
+neko-providers = { workspace = true }
+neko-tools     = { workspace = true }
+neko-skills    = { workspace = true }
+neko-mcp       = { workspace = true }

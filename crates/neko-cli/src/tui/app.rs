@@ -1958,13 +1958,13 @@ fn draw<B: ratatui::backend::Backend>(term: &mut Terminal<B>, state: &mut AppSta
 // ── footer zone 渲染函数 ──────────────────────────────────────────────────────
 
 /// 通知态：显示临时状态消息或 token 警告。
-fn render_notification(state: &AppState, token_pct: Option<f64>) -> ratatui::widgets::Paragraph<'static> {
+fn render_notification<'a>(state: &'a AppState, token_pct: Option<f64>) -> ratatui::widgets::Paragraph<'a> {
     let dim = ratatui::style::Style::default().fg(MUTED);
 
     if let Some(ref msg) = state.status_msg {
         return ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
             ratatui::text::Span::styled("● ", ratatui::style::Style::default().fg(WARN)),
-            ratatui::text::Span::styled(msg.clone(), dim),
+            ratatui::text::Span::styled(msg.as_str(), dim),
         ]));
     }
 
@@ -1992,7 +1992,7 @@ fn render_notification(state: &AppState, token_pct: Option<f64>) -> ratatui::wid
 }
 
 /// 提醒态：上下文感知的快捷键提示。
-fn render_hint(state: &AppState) -> ratatui::widgets::Paragraph<'static> {
+fn render_hint<'a>(state: &'a AppState) -> ratatui::widgets::Paragraph<'a> {
     let dim = ratatui::style::Style::default().fg(MUTED);
     let accent = ratatui::style::Style::default().fg(THINK);
 
@@ -2025,7 +2025,7 @@ fn render_hint(state: &AppState) -> ratatui::widgets::Paragraph<'static> {
 }
 
 /// 状态栏：模式 · 模型 · token · 右侧运行状态。
-fn render_status_bar(state: &AppState, max_w: u16, token_pct: Option<f64>) -> ratatui::widgets::Paragraph<'static> {
+fn render_status_bar<'a>(state: &'a AppState, max_w: u16, token_pct: Option<f64>) -> ratatui::widgets::Paragraph<'a> {
     use unicode_width::UnicodeWidthStr;
 
     let dim = ratatui::style::Style::default().fg(MUTED);
@@ -2033,17 +2033,17 @@ fn render_status_bar(state: &AppState, max_w: u16, token_pct: Option<f64>) -> ra
     let mcolor = super::theme::mode_color(&state.mode);
     let max_w = max_w as usize;
 
-    let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
+    let mut spans: Vec<ratatui::text::Span<'a>> = Vec::new();
 
     // 模式
     spans.push(ratatui::text::Span::styled(
         format!("⏵⏵ {}", state.mode),
         bold_dim.fg(mcolor),
     ));
-    spans.push(ratatui::text::Span::styled(" · ".to_string(), dim));
+    spans.push(ratatui::text::Span::styled(" · ", dim));
 
     // 模型
-    spans.push(ratatui::text::Span::styled(state.model.clone(), dim));
+    spans.push(ratatui::text::Span::styled(state.model.as_str(), dim));
 
     // spinner（紧跟模型名，保证始终可见）
     if state.is_running {
@@ -2053,7 +2053,7 @@ fn render_status_bar(state: &AppState, max_w: u16, token_pct: Option<f64>) -> ra
 
     // skip-perm
     if state.skip_perms {
-        spans.push(ratatui::text::Span::styled(" · skip-perm".to_string(), dim.fg(ERR)));
+        spans.push(ratatui::text::Span::styled(" · skip-perm", dim.fg(ERR)));
     }
 
     // token 计数

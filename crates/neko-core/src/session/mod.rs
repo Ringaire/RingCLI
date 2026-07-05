@@ -36,18 +36,22 @@ pub struct Session {
 
 // ── 内存中待写入的会话（尚未落盘）────────────────────────────────────────────
 
-static PENDING: once_cell::sync::Lazy<Arc<Mutex<HashMap<Uuid, SessionMeta>>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+static PENDING: std::sync::LazyLock<Arc<Mutex<HashMap<Uuid, SessionMeta>>>> =
+    std::sync::LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 // ── 公共 API ──────────────────────────────────────────────────────────────────
 
 pub async fn init_dirs() -> std::io::Result<()> {
-    let sessions = paths::sessions_dir();
-    tokio::fs::create_dir_all(&sessions).await?;
+    // Migrate old XDG paths to new unified ~/.neko/ structure
+    paths::migrate_from_xdg()?;
+
+    // Create all required directories under ~/.neko/
+    tokio::fs::create_dir_all(paths::sessions_dir()).await?;
     tokio::fs::create_dir_all(paths::config_dir()).await?;
     tokio::fs::create_dir_all(paths::cache_dir()).await?;
-    tokio::fs::create_dir_all(paths::state_dir()).await?;
-    tokio::fs::create_dir_all(paths::skills_dir()).await
+    tokio::fs::create_dir_all(paths::logs_dir()).await?;
+    tokio::fs::create_dir_all(paths::skills_dir()).await?;
+    Ok(())
 }
 
 pub async fn create_session(cwd: PathBuf, model: Option<String>) -> Session {

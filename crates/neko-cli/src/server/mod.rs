@@ -214,25 +214,25 @@ async fn chat(
             match sub.recv().await {
                 Ok(ev) => match ev {
                     NekoEvent::AgentTextDone { full, .. } => {
-                        *text_c.lock().unwrap() = full;
+                        *text_c.lock().expect("text mutex poisoned during AgentTextDone") = full;
                     }
                     NekoEvent::AgentText { delta, .. } => {
                         // 累加所有 delta（不再只取第一个）
-                        text_c.lock().unwrap().push_str(&delta);
+                        text_c.lock().expect("text mutex poisoned during AgentText").push_str(&delta);
                     }
                     NekoEvent::AgentReasoningDone { full, .. } => {
-                        *reasoning_c.lock().unwrap() = full;
+                        *reasoning_c.lock().expect("reasoning mutex poisoned during AgentReasoningDone") = full;
                     }
                     NekoEvent::AgentReasoning { delta, .. } => {
-                        reasoning_c.lock().unwrap().push_str(&delta);
+                        reasoning_c.lock().expect("reasoning mutex poisoned during AgentReasoning").push_str(&delta);
                     }
                     NekoEvent::AgentDone { stop_reason, .. } => {
-                        *stop_c.lock().unwrap() = stop_reason;
+                        *stop_c.lock().expect("stop_reason mutex poisoned during AgentDone") = stop_reason;
                         break;
                     }
                     NekoEvent::AgentError { error, .. } => {
-                        *stop_c.lock().unwrap() = "error".to_string();
-                        *text_c.lock().unwrap() = error;
+                        *stop_c.lock().expect("stop_reason mutex poisoned during AgentError") = "error".to_string();
+                        *text_c.lock().expect("text mutex poisoned during AgentError") = error;
                         break;
                     }
                     _ => {}
@@ -250,12 +250,12 @@ async fn chat(
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut done_rx).await;
     collector.abort();
 
-    let content = text_out.lock().unwrap().clone();
+    let content = text_out.lock().expect("text mutex poisoned when reading final content").clone();
     let reasoning = {
-        let r = reasoning_out.lock().unwrap().clone();
+        let r = reasoning_out.lock().expect("reasoning mutex poisoned when reading final reasoning").clone();
         if r.is_empty() { None } else { Some(r) }
     };
-    let stop_reason = stop_out.lock().unwrap().clone();
+    let stop_reason = stop_out.lock().expect("stop_reason mutex poisoned when reading final stop_reason").clone();
 
     Ok(Json(ChatResponse {
         role: "assistant".into(),

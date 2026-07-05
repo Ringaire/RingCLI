@@ -74,12 +74,19 @@ impl RcaClient {
     /// Check if this client has a stored auth token.
     /// Send a TaskResult back to NekoRCA.
     pub fn send_result(&self, result: TaskResult) {
+        let payload = serde_json::to_value(result).unwrap_or_else(|e| {
+            tracing::error!("failed to serialize TaskResult: {}", e);
+            serde_json::json!({"error": "serialization failed"})
+        });
         let env = build_envelope(
             MsgType::TaskResult,
             Direction::Upstream,
-            serde_json::to_value(result).unwrap(),
+            payload,
         );
-        let text = serde_json::to_string(&env).unwrap_or_default();
+        let text = serde_json::to_string(&env).unwrap_or_else(|e| {
+            tracing::error!("failed to stringify envelope: {}", e);
+            r#"{"error":"serialization failed"}"#.to_string()
+        });
         let _ = self.cmd_tx.send(RcaCommand::SendMessage(text));
     }
 
@@ -162,7 +169,11 @@ async fn rca_loop(
                                 MsgType::Heartbeat => {
                                     let pong = build_envelope(MsgType::HeartbeatAck, Direction::Upstream, env.payload);
                                     if let Some((ref mut ws_stream, _)) = ws {
-                                        let _ = ws_stream.send(Message::Text(serde_json::to_string(&pong).unwrap().into())).await;
+                                        let text = serde_json::to_string(&pong).unwrap_or_else(|e| {
+                                            tracing::error!("failed to serialize heartbeat ack: {}", e);
+                                            r#"{"error":"serialization failed"}"#.to_string()
+                                        });
+                                        let _ = ws_stream.send(Message::Text(text.into())).await;
                                     }
                                 }
                                 MsgType::HeartbeatAck => {
@@ -203,13 +214,20 @@ async fn rca_loop(
             _ = tokio::time::sleep(Duration::from_secs(30)) => {
                 if ws.is_some() {
                     heartbeat_seq += 1;
+                    let payload = serde_json::to_value(Heartbeat { seq: heartbeat_seq }).unwrap_or_else(|e| {
+                        tracing::error!("failed to serialize Heartbeat: {}", e);
+                        serde_json::json!({"seq": heartbeat_seq})
+                    });
                     let hb = build_envelope(
                         MsgType::Heartbeat,
                         Direction::Upstream,
-                        serde_json::to_value(Heartbeat { seq: heartbeat_seq }).unwrap(),
+                        payload,
                     );
                     if let Some((ref mut ws_stream, _)) = ws {
-                        let text = serde_json::to_string(&hb).unwrap();
+                        let text = serde_json::to_string(&hb).unwrap_or_else(|e| {
+                            tracing::error!("failed to stringify heartbeat envelope: {}", e);
+                            r#"{"error":"serialization failed"}"#.to_string()
+                        });
                         let _ = ws_stream.send(Message::Text(text.into())).await;
                     }
                 }
@@ -248,7 +266,10 @@ async fn connect_rca(
             labels: Some(vec!["nekocli".to_string()]),
             auth_token,
         })
-        .unwrap(),
+        .unwrap_or_else(|e| {
+            error!("failed to serialize Register: {}", e);
+            serde_json::json!({"error": "serialization failed"})
+        }),
         timestamp: chrono::Utc::now().timestamp_millis(),
         direction: Direction::Upstream,
     };
@@ -257,7 +278,10 @@ async fn connect_rca(
     let (mut write, mut read) = ws_stream.split();
 
     // Send register
-    let reg_text = serde_json::to_string(&register).unwrap();
+    let reg_text = serde_json::to_string(&register).unwrap_or_else(|e| {
+        error!("failed to stringify register envelope: {}", e);
+        r#"{"error":"serialization failed"}"#.to_string()
+    });
     write
         .send(Message::Text(reg_text.into()))
         .await
@@ -364,12 +388,19 @@ pub async fn connect_and_run(
             loop {
                 tokio::time::sleep(Duration::from_secs(heartbeat_secs)).await;
                 seq += 1;
+                let payload = serde_json::to_value(Heartbeat { seq }).unwrap_or_else(|e| {
+                    error!("failed to serialize Heartbeat in spawn: {}", e);
+                    serde_json::json!({"seq": seq})
+                });
                 let hb = build_envelope(
                     MsgType::Heartbeat,
                     Direction::Upstream,
-                    serde_json::to_value(Heartbeat { seq }).unwrap(),
+                    payload,
                 );
-                let text = serde_json::to_string(&hb).unwrap_or_default();
+                let text = serde_json::to_string(&hb).unwrap_or_else(|e| {
+                    error!("failed to stringify heartbeat in spawn: {}", e);
+                    r#"{"error":"serialization failed"}"#.to_string()
+                });
                 if hb_tx.send(Message::Text(text.into())).is_err() {
                     break;
                 }
@@ -488,10 +519,14 @@ async fn execute_task(
 
 /// Send a TaskResult back to RCA.
 pub async fn send_task_result(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, result: TaskResult) -> Result<(), String> {
+    let payload = serde_json::to_value(result).unwrap_or_else(|e| {
+        error!("failed to serialize TaskResult: {}", e);
+        serde_json::json!({"error": "serialization failed"})
+    });
     let env = build_envelope(
         MsgType::TaskResult,
         Direction::Upstream,
-        serde_json::to_value(result).unwrap(),
+        payload,
     );
     let text = serde_json::to_string(&env).map_err(|e| format!("serialize failed: {e}"))?;
     ws.send(Message::Text(text.into()))

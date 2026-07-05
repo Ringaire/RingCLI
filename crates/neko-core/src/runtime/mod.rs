@@ -17,7 +17,7 @@ use tracing::{debug, warn};
 use crate::config::McpServerConfig;
 use crate::events::EventBus;
 use crate::skills::SkillRegistry;
-use crate::tools::{DefaultToolRegistry, ToolRegistry};
+use crate::tools::{HybridToolRegistry, ToolRegistry};
 
 /// MCP 服务器管理器：由上层提供实现，打破 core→mcp 循环依赖。
 #[async_trait]
@@ -42,7 +42,7 @@ struct McpServerState {
 
 pub struct NekoRuntime {
     pub bus:    EventBus,
-    pub tools:  Arc<DefaultToolRegistry>,
+    pub tools:  Arc<HybridToolRegistry>,
     pub skills: Arc<RwLock<SkillRegistry>>,
     mcp_manager: RwLock<Option<Arc<dyn McpManager>>>,
     mcp_servers: RwLock<HashMap<String, McpServerState>>,
@@ -52,7 +52,21 @@ impl NekoRuntime {
     pub fn new() -> Self {
         Self {
             bus:         EventBus::new(),
-            tools:       Arc::new(DefaultToolRegistry::new()),
+            tools:       Arc::new(HybridToolRegistry::new()),
+            skills:      Arc::new(RwLock::new(SkillRegistry::new())),
+            mcp_manager: RwLock::new(None),
+            mcp_servers: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// 使用预初始化的工具注册表创建运行时。
+    ///
+    /// 用于注入已注册内置工具的 `HybridToolRegistry`，
+    /// 避免在创建后再逐一注册工具。
+    pub fn new_with_tools(tools: HybridToolRegistry) -> Self {
+        Self {
+            bus:         EventBus::new(),
+            tools:       Arc::new(tools),
             skills:      Arc::new(RwLock::new(SkillRegistry::new())),
             mcp_manager: RwLock::new(None),
             mcp_servers: RwLock::new(HashMap::new()),
@@ -160,5 +174,123 @@ fn mcp_cfg_eq(a: &McpServerConfig, b: &McpServerConfig) -> bool {
         }
         (Sse { url: u1, headers: h1 }, Sse { url: u2, headers: h2 }) => u1 == u2 && h1 == h2,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::HybridToolRegistry;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_neko_runtime_new() {
+        let runtime = NekoRuntime::new();
+        assert!(runtime.tools.get("bash").is_none()); // 空注册表
+    }
+
+    #[test]
+    fn test_neko_runtime_new_with_tools() {
+        let registry = HybridToolRegistry::new();
+        let runtime = NekoRuntime::new_with_tools(registry);
+        assert!(runtime.tools_dyn().get("bash").is_none());
+    }
+
+    #[test]
+    fn test_neko_runtime_tools_dyn() {
+        let runtime = NekoRuntime::new();
+        let trait_obj = runtime.tools_dyn();
+        assert!(trait_obj.get("bash").is_none());
+    }
+
+    #[test]
+    fn test_neko_runtime_default() {
+        let runtime = NekoRuntime::default();
+        assert!(runtime.mcp_manager.read().is_none());
+    }
+
+    #[test]
+    fn test_mcp_cfg_eq_stdio_same() {
+        let cfg1 = McpServerConfig::Stdio {
+            command: "test".to_string(),
+            args: vec!["arg1".to_string()],
+            env: HashMap::new(),
+        };
+        let cfg2 = McpServerConfig::Stdio {
+            command: "test".to_string(),
+            args: vec!["arg1".to_string()],
+            env: HashMap::new(),
+        };
+        assert!(mcp_cfg_eq(&cfg1, &cfg2));
+    }
+
+    #[test]
+    fn test_mcp_cfg_eq_stdio_different_command() {
+        let cfg1 = McpServerConfig::Stdio {
+            command: "test1".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+        };
+        let cfg2 = McpServerConfig::Stdio {
+            command: "test2".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+        };
+        assert!(!mcp_cfg_eq(&cfg1, &cfg2));
+    }
+
+    #[test]
+    fn test_mcp_cfg_eq_stdio_different_args() {
+        let cfg1 = McpServerConfig::Stdio {
+            command: "test".to_string(),
+            args: vec!["arg1".to_string()],
+            env: HashMap::new(),
+        };
+        let cfg2 = McpServerConfig::Stdio {
+            command: "test".to_string(),
+            args: vec!["arg2".to_string()],
+            env: HashMap::new(),
+        };
+        assert!(!mcp_cfg_eq(&cfg1, &cfg2));
+    }
+
+    #[test]
+    fn test_mcp_cfg_eq_sse_same() {
+        let cfg1 = McpServerConfig::Sse {
+            url: "http://test".to_string(),
+            headers: HashMap::new(),
+        };
+        let cfg2 = McpServerConfig::Sse {
+            url: "http://test".to_string(),
+            headers: HashMap::new(),
+        };
+        assert!(mcp_cfg_eq(&cfg1, &cfg2));
+    }
+
+    #[test]
+    fn test_mcp_cfg_eq_sse_different_url() {
+        let cfg1 = McpServerConfig::Sse {
+            url: "http://test1".to_string(),
+            headers: HashMap::new(),
+        };
+        let cfg2 = McpServerConfig::Sse {
+            url: "http://test2".to_string(),
+            headers: HashMap::new(),
+        };
+        assert!(!mcp_cfg_eq(&cfg1, &cfg2));
+    }
+
+    #[test]
+    fn test_mcp_cfg_eq_different_types() {
+        let cfg1 = McpServerConfig::Stdio {
+            command: "test".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+        };
+        let cfg2 = McpServerConfig::Sse {
+            url: "http://test".to_string(),
+            headers: HashMap::new(),
+        };
+        assert!(!mcp_cfg_eq(&cfg1, &cfg2));
     }
 }

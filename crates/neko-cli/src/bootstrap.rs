@@ -103,12 +103,11 @@ pub async fn bootstrap(args: &Args, session_id: Option<uuid::Uuid>) -> Result<Bo
     let permissions = Arc::new(Mutex::new(perm_engine));
 
     // ── 5. 运行时（工具注册表 + 事件总线 + MCP 管理）──
-    let neko_runtime = Arc::new(NekoRuntime::new());
+    let neko_runtime = Arc::new(NekoRuntime::new_with_tools(
+        neko_tools::init_hybrid_registry()
+    ));
     neko_runtime.set_mcp_manager(Arc::new(CliMcpManager::new()));
     let bus = neko_runtime.bus.clone();
-
-    // 内置工具
-    neko_tools::register_all(neko_runtime.tools.as_ref());
 
     // ── 6. MCP 服务器（通过运行时动态加载，支持后续热重载）──
     neko_runtime.apply_mcp_config(&config.mcp_servers).await;
@@ -198,7 +197,7 @@ pub async fn bootstrap(args: &Args, session_id: Option<uuid::Uuid>) -> Result<Bo
 
 /// 构建子 agent 模型目录：优先用 config.models[provider]，否则用 provider 的内置模型列表，
 /// 再否则退化为仅当前模型。
-async fn build_catalog(
+pub async fn build_catalog(
     config:   &ResolvedConfig,
     provider: Option<&dyn Provider>,
     model:    &str,
@@ -228,7 +227,7 @@ async fn build_catalog(
 ///
 /// **不预设任何 provider**：当没有任何可用 provider（冷启动、未配置 key）时返回 `(None, "")`，
 /// 由 UI 进入 setup-required 态、提示用户 `/connect`，而非报错退出或回退到某家提供商。
-fn resolve_provider_and_model(
+pub fn resolve_provider_and_model(
     args:        &Args,
     config:      &ResolvedConfig,
     registry:    &ProviderRegistry,

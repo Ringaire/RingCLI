@@ -64,12 +64,12 @@ pub struct SseTransport {
 }
 
 impl SseTransport {
-    pub fn new(url: impl Into<String>, headers: std::collections::HashMap<String, String>) -> Self {
+    pub fn new(url: impl Into<String>, headers: std::collections::HashMap<String, String>) -> Result<Self, McpError> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .expect("failed to build reqwest client");
-        Self { client, base_url: url.into(), headers }
+            .map_err(|e| McpError::Other(format!("failed to build HTTP client - check TLS configuration: {}", e)))?;
+        Ok(Self { client, base_url: url.into(), headers })
     }
 }
 

@@ -200,7 +200,7 @@ impl InputWidget {
     /// 渲染输入框（顶部圆角边框，`❯ ` 提示符按模式着色；模式名见状态栏）。
     /// 长行按 `inner_width` 软换行，避免溢出。
     /// `ghost`：行内幽灵补全后缀（灰字，可空）。`arg_hint`：命令参数提示。
-    pub fn render(&self, mode: &str, ghost: &str, arg_hint: Option<&str>, inner_width: u16) -> Paragraph<'static> {
+    pub fn render<'a>(&'a self, mode: &'a str, ghost: &'a str, arg_hint: Option<&'a str>, inner_width: u16) -> Paragraph<'a> {
         let accent = if self.disabled { MUTED } else { mode_color(mode) };
         let cont = " ".repeat(PROMPT_W as usize); // 续行缩进与 `❯ ` 对齐
         let w = Self::text_width(inner_width);
@@ -217,7 +217,7 @@ impl InputWidget {
             }
         }
 
-        let mut lines: Vec<Line<'static>> = visual
+        let mut lines: Vec<Line<'a>> = visual
             .into_iter()
             .map(|(first, text)| {
                 if first {
@@ -235,7 +235,7 @@ impl InputWidget {
         if !self.disabled {
             if let Some(last) = lines.last_mut() {
                 if !ghost.is_empty() {
-                    last.spans.push(Span::styled(ghost.to_string(), Style::default().fg(MUTED)));
+                    last.spans.push(Span::styled(ghost, Style::default().fg(MUTED)));
                 }
                 if let Some(h) = arg_hint {
                     last.spans.push(Span::styled(format!(" {}", h), Style::default().fg(MUTED)));

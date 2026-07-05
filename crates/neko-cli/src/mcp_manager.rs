@@ -48,7 +48,9 @@ impl McpManager for CliMcpManager {
                 Box::new(t)
             }
             McpServerConfig::Sse { url, headers } => {
-                Box::new(SseTransport::new(url.clone(), headers.clone()))
+                let t = SseTransport::new(url.clone(), headers.clone())
+                    .map_err(|e| format!("build SSE transport for '{name}': {e}"))?;
+                Box::new(t)
             }
         };
 

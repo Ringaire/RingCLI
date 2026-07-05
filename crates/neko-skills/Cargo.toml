@@ -2,7 +2,7 @@
 name        = "neko-skills"
 description = "技能注册系统：技能接口、注册表、MCP 工具转技能"
 version.workspace = true
-edition     = "2021"
+edition.workspace = true
 license.workspace = true
 
 [dependencies]

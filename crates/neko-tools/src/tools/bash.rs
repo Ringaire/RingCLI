@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use neko_core::session::paths;
 use neko_core::tools::{Tool, ToolContext, ToolResult};
-use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
@@ -35,8 +34,8 @@ struct TaskState {
     finished_ms: Option<u128>,
 }
 
-static TASK_REGISTRY: Lazy<Arc<Mutex<HashMap<String, TaskState>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+static TASK_REGISTRY: std::sync::LazyLock<Arc<Mutex<HashMap<String, TaskState>>>> =
+    std::sync::LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 fn new_task_id() -> String {
     let ts = now_ms();

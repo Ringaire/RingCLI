@@ -2,7 +2,7 @@
 name        = "neko-mcp"
 description = "MCP 协议客户端：stdio 和 SSE 传输，工具桥接"
 version.workspace = true
-edition     = "2021"
+edition.workspace = true
 license.workspace = true
 
 [dependencies]

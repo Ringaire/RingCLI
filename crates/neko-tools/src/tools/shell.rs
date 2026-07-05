@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use neko_core::tools::{Tool, ToolContext, ToolResult};
-use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,8 +18,8 @@ struct ShellSession {
     created_ms: u128,
 }
 
-static SESSIONS: Lazy<Arc<Mutex<HashMap<String, ShellSession>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+static SESSIONS: std::sync::LazyLock<Arc<Mutex<HashMap<String, ShellSession>>>> =
+    std::sync::LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 fn new_session_id() -> String {
     use std::hash::{Hash, Hasher};

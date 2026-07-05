@@ -14,8 +14,8 @@ pub const ENTER_PLAN_TOOL_NAME: &str = "enter_plan_mode";
 pub const EXIT_PLAN_TOOL_NAME: &str = "exit_plan_mode";
 
 /// 当前 plan 会话状态（全局，供 TUI / REPL 查询）
-static PLAN_STATE: once_cell::sync::Lazy<tokio::sync::Mutex<Option<PlanSession>>> =
-    once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(None));
+static PLAN_STATE: std::sync::LazyLock<tokio::sync::Mutex<Option<PlanSession>>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(None));
 
 #[derive(Clone, Debug)]
 pub struct PlanSession {

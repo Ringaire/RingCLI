@@ -9,6 +9,8 @@ members = [
     "crates/neko-skills",
     "crates/neko-engine",
     "crates/neko-cli",
+    "crates/linkkit-parser",
+    "crates/neko-linkkit",
 ]
 
 [workspace.package]
@@ -27,6 +29,9 @@ futures-util   = { version = "0.3", default-features = false, features = ["std"]
 # 序列化
 serde          = { version = "1", features = ["derive"] }
 serde_json     = "1"
+
+# XML 解析
+quick-xml      = "0.36"
 
 # 错误处理
 thiserror      = "2"
@@ -52,7 +57,6 @@ tracing        = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender   = "0.2"
 async-trait    = "0.1"
-once_cell      = "1"
 parking_lot    = "0.12"
 arc-swap       = "1"
 regex          = "1"
@@ -68,13 +72,22 @@ notify         = "6"
 base64         = "0.22"
 axum           = { version = "0.8", features = ["ws"] }
 tokio-tungstenite = "0.24"
+pulldown-cmark = "0.13"
+sha2           = "0.10"
+url            = "2"
+
+# 性能基准测试
+criterion      = { version = "0.5", features = ["html_reports", "async_tokio"] }
 
 # crate 内部依赖
 neko-core      = { path = "crates/neko-core" }
+neko-engine    = { path = "crates/neko-engine" }
 neko-providers = { path = "crates/neko-providers" }
 neko-tools     = { path = "crates/neko-tools" }
 neko-mcp       = { path = "crates/neko-mcp" }
 neko-skills    = { path = "crates/neko-skills" }
+linkkit-parser = { path = "crates/linkkit-parser" }
+neko-linkkit   = { path = "crates/neko-linkkit" }
 
 [profile.dev]
 opt-level = 0

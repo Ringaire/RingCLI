@@ -24,18 +24,15 @@ pub fn welcome_height(model: &str, mode: &str, cwd: &str) -> usize {
     welcome_lines(model, mode, cwd).len()
 }
 
-pub fn render_welcome(model: &str, mode: &str, cwd: &str) -> Paragraph<'static> {
+pub fn render_welcome<'a>(model: &'a str, mode: &'a str, cwd: &'a str) -> Paragraph<'a> {
     Paragraph::new(welcome_lines(model, mode, cwd)).wrap(Wrap { trim: false })
 }
 
-fn welcome_lines(model: &str, mode: &str, cwd: &str) -> Vec<Line<'static>> {
+fn welcome_lines<'a>(model: &'a str, mode: &'a str, cwd: &'a str) -> Vec<Line<'a>> {
     let mcolor = mode_color(mode);
     let mdesc  = mode_desc(mode);
-    let model  = model.to_string();
-    let mode_s = mode.to_string();
-    let cwd_s  = cwd.to_string();
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut lines: Vec<Line<'a>> = Vec::new();
 
     // ── cat + header ──────────────────────────────────────────────────────────
     // 猫占 3 行，右侧信息同行排列
@@ -53,13 +50,13 @@ fn welcome_lines(model: &str, mode: &str, cwd: &str) -> Vec<Line<'static>> {
     lines.push(Line::from(vec![
         Span::styled("  \\ ^^ /   ", Style::default().fg(UI)),
         Span::styled("Mode    ", Style::default().fg(MUTED)),
-        Span::styled(mode_s.to_uppercase(), Style::default().fg(mcolor).add_modifier(Modifier::BOLD)),
+        Span::styled(mode.to_uppercase(), Style::default().fg(mcolor).add_modifier(Modifier::BOLD)),
         Span::styled(format!("  {}", mdesc), Style::default().fg(MUTED)),
     ]));
     lines.push(Line::from(vec![
         Span::styled("           ", Style::default()),
         Span::styled("CWD     ", Style::default().fg(MUTED)),
-        Span::styled(cwd_s, Style::default().fg(MAIN)),
+        Span::styled(cwd, Style::default().fg(MAIN)),
     ]));
 
     lines.push(Line::from(""));
@@ -81,7 +78,7 @@ fn welcome_lines(model: &str, mode: &str, cwd: &str) -> Vec<Line<'static>> {
     for (key, desc) in tips {
         lines.push(Line::from(vec![
             Span::styled(format!("    {:<22}", key), Style::default().fg(UI)),
-            Span::styled(desc.to_string(), Style::default().fg(MUTED)),
+            Span::styled(*desc, Style::default().fg(MUTED)),
         ]));
     }
 

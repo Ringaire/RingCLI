@@ -218,8 +218,8 @@ impl ChatWidget {
 
     /// 构建全部可视行（不做视口截断）。
     /// `filter_sub`：仅显示指定子 agent 的气泡（None = 全部显示）。
-    fn build_lines(&self, width: usize, show_reasoning: bool, filter_sub: Option<Uuid>) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
+    fn build_lines<'a>(&'a self, width: usize, show_reasoning: bool, filter_sub: Option<Uuid>) -> Vec<Line<'a>> {
+        let mut lines: Vec<Line<'a>> = Vec::new();
 
         for b in &self.bubbles {
             // 当 show_reasoning 为 false 时跳过 reasoning 气泡
@@ -245,7 +245,7 @@ impl ChatWidget {
                 if b.sub_agent.is_some() { ("  ┆ ", 4) } else { ("", 0) };
 
             // 行首：可选子 agent 缩进。
-            let lead = |spans: &mut Vec<Span<'static>>| {
+            let lead = |spans: &mut Vec<Span<'a>>| {
                 if !indent.is_empty() {
                     spans.push(Span::styled(indent, Style::default().fg(MUTED)));
                 }
@@ -419,7 +419,7 @@ impl ChatWidget {
     /// 渲染为 Paragraph（无边框）。只渲染能塞进 area 的末尾行数，保证最新内容可见。
     /// `show_reasoning` 控制是否展示 thinking/reasoning 气泡。
     /// `filter_sub`：仅显示指定子 agent 的气泡（None = 全部显示）。
-    pub fn render(&self, area: Rect, show_reasoning: bool, filter_sub: Option<Uuid>) -> Paragraph<'static> {
+    pub fn render<'a>(&'a self, area: Rect, show_reasoning: bool, filter_sub: Option<Uuid>) -> Paragraph<'a> {
         let width = area.width.max(1) as usize;
         let max_lines = area.height as usize;
         let mut lines = self.build_lines(width, show_reasoning, filter_sub);
@@ -436,7 +436,7 @@ impl ChatWidget {
             lines.truncate(max_lines);
         } else if lines.len() < max_lines {
             let pad = max_lines - lines.len();
-            let mut padded: Vec<Line<'static>> = vec![Line::from(""); pad];
+            let mut padded: Vec<Line<'a>> = vec![Line::from(""); pad];
             padded.extend(lines);
             lines = padded;
         }

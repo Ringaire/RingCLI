@@ -2,7 +2,7 @@
 name        = "neko-core"
 description = "NekoCode 核心类型、trait、事件总线、权限引擎、会话存储、配置加载"
 version.workspace = true
-edition     = "2021"
+edition.workspace = true
 license.workspace = true
 
 [dependencies]
@@ -20,4 +20,14 @@ parking_lot  = { workspace = true }
 arc-swap     = { workspace = true }
 tokio-util   = { workspace = true }
 async-trait  = { workspace = true }
-once_cell    = { workspace = true }
+
+[dev-dependencies]
+criterion    = { workspace = true }
+
+[[bench]]
+name = "tool_registry"
+harness = false
+
+[[bench]]
+name = "string_allocation"
+harness = false

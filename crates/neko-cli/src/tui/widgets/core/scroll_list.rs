@@ -136,13 +136,13 @@ pub fn pointer(selected: bool) -> Span<'static> {
 }
 
 /// 列表项标签：选中时青色加粗，否则灰色。
-pub fn label(selected: bool, text: String) -> Span<'static> {
+pub fn label<'a>(selected: bool, text: impl Into<String>) -> Span<'a> {
     let style = if selected {
         Style::default().fg(UI).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(INACTIVE)
     };
-    Span::styled(text, style)
+    Span::styled(text.into(), style)
 }
 
 #[cfg(test)]

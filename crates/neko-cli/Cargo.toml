@@ -2,7 +2,7 @@
 name        = "neko-cli"
 description = "NekoCode CLI 入口、TUI 界面（ratatui）、REPL、Agent turn 循环"
 version.workspace = true
-edition     = "2021"
+edition.workspace = true
 license.workspace = true
 
 [[bin]]
@@ -11,7 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 neko-core      = { workspace = true }
-neko-engine    = { path = "../neko-engine" }
+neko-engine    = { workspace = true }
 neko-providers = { workspace = true }
 neko-tools     = { workspace = true }
 neko-mcp       = { workspace = true }
@@ -35,9 +35,12 @@ tracing        = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender   = { workspace = true }
 unicode-width  = { workspace = true }
-pulldown-cmark = "0.13"
+pulldown-cmark = { workspace = true }
 parking_lot    = { workspace = true }
 notify         = { workspace = true }
 axum           = { workspace = true }
 tower-http     = { workspace = true }
 tokio-tungstenite = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
