@@ -9,8 +9,8 @@ use uuid::Uuid;
 pub mod builtin;
 pub mod hybrid;
 
-pub use builtin::{BuiltinTool, BuiltinToolKind};
-pub use hybrid::{HybridToolRegistry, ToolHandle};
+pub use builtin::BuiltinToolKind;
+pub use hybrid::HybridToolRegistry;
 
 // ── 内容块（消息内容的原子单元）─────────────────────────────────────────────
 
