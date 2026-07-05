@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 neko-core    = { workspace = true }
+parking_lot  = { workspace = true }
 tokio        = { workspace = true }
 tokio-util   = { workspace = true }
 tokio-stream = { workspace = true }
