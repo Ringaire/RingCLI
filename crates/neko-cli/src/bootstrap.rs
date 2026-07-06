@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
+use parking_lot::RwLock;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
@@ -25,7 +26,7 @@ use crate::mcp_manager::CliMcpManager;
 pub struct BootstrappedRuntime {
     pub bus:               EventBus,
     pub tools:             Arc<dyn ToolRegistry>,
-    pub skills:            Arc<SkillRegistry>,
+    pub skills:            Arc<RwLock<SkillRegistry>>,
     pub permissions:       Arc<Mutex<DefaultPermissionEngine>>,
     /// 当前 provider。`None` = 未配置任何可用 provider（冷启动），UI 须进入 setup-required 态。
     pub provider:          Option<Arc<dyn Provider>>,
@@ -57,10 +58,11 @@ impl BootstrappedRuntime {
     pub async fn rebuild_context(&mut self) {
         let model = self.model.clone();
         self.catalog = build_catalog(&self.config, self.provider.as_deref(), &model).await;
+        let skills_xml = self.skills.read().build_available_skills();
         let base = neko_engine::build_system_prompt(
             self.cwd.as_path(),
             self.tools.as_ref(),
-            &self.skills,
+            &skills_xml,
             &model,
             &self.mode.to_string(),
         ).await;
@@ -102,19 +104,7 @@ pub async fn bootstrap(args: &Args, session_id: Option<uuid::Uuid>) -> Result<Bo
     }
     let permissions = Arc::new(Mutex::new(perm_engine));
 
-    // ── 5. 运行时（工具注册表 + 事件总线 + MCP 管理）──
-    let neko_runtime = Arc::new(NekoRuntime::new_with_tools(
-        neko_tools::init_hybrid_registry()
-    ));
-    neko_runtime.set_mcp_manager(Arc::new(CliMcpManager::new()));
-    let bus = neko_runtime.bus.clone();
-
-    // ── 6. MCP 服务器（通过运行时动态加载，支持后续热重载）──
-    neko_runtime.apply_mcp_config(&config.mcp_servers).await;
-
-    let tools: Arc<dyn ToolRegistry> = neko_runtime.tools_dyn();
-
-    // ── 7. 技能（内置 → 全局目录 → 项目级 .agents/skills + .neko/skills）──
+    // ── 5. 技能（内置 → 全局目录 → 项目级）── 提前加载，MCP prompts import 需要
     let mut skill_registry = SkillRegistry::new();
     neko_skills::load_builtin_skills(&mut skill_registry);
 
@@ -134,7 +124,19 @@ pub async fn bootstrap(args: &Args, session_id: Option<uuid::Uuid>) -> Result<Bo
     let neko_skills_dir = cwd.join(".neko").join("skills");
     neko_skills::load_skills_from_dir(&mut skill_registry, &neko_skills_dir).await;
 
-    let skills = Arc::new(skill_registry);
+    let skills: Arc<RwLock<SkillRegistry>> = Arc::new(RwLock::new(skill_registry));
+
+    // ── 6. 运行时（工具注册表 + 事件总线 + MCP 管理，共享 skills）──
+    let mut neko_rt = NekoRuntime::new_with_tools(neko_tools::init_hybrid_registry());
+    neko_rt.skills = skills.clone();
+    let neko_runtime = Arc::new(neko_rt);
+    neko_runtime.set_mcp_manager(Arc::new(CliMcpManager::new(skills.clone())));
+    let bus = neko_runtime.bus.clone();
+
+    // ── 7. MCP 服务器（加载时自动把 server 的 prompts import 到 skills）──
+    neko_runtime.apply_mcp_config(&config.mcp_servers).await;
+
+    let tools: Arc<dyn ToolRegistry> = neko_runtime.tools_dyn();
 
     // ── 8. 会话（新建或恢复）──
     let session = match session_id {
@@ -152,7 +154,8 @@ pub async fn bootstrap(args: &Args, session_id: Option<uuid::Uuid>) -> Result<Bo
     let catalog = build_catalog(&config, provider.as_deref(), &model).await;
 
     // ── 10. 系统提示词（基础 + 编排段）──
-    let base_prompt = build_system_prompt(&cwd, tools.as_ref(), &skills, &model, &args.mode).await;
+    let skills_xml = skills.read().build_available_skills();
+    let base_prompt = build_system_prompt(&cwd, tools.as_ref(), &skills_xml, &model, &args.mode).await;
     let system_prompt = neko_engine::agent::orchestrator::build_orchestrator_prompt(&catalog, &model, &base_prompt);
 
     // ── 11. 配置热重载监听 ──
@@ -168,7 +171,7 @@ pub async fn bootstrap(args: &Args, session_id: Option<uuid::Uuid>) -> Result<Bo
         model = %model,
         mode = %mode,
         tools = tools.list().len(),
-        skills = skills.list().len(),
+        skills = skills.read().list().len(),
         mcp = neko_runtime.mcp_server_names().len(),
         catalog = catalog.len(),
         hot_reload = config_watcher.is_some(),

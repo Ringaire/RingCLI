@@ -69,7 +69,8 @@ pub async fn run_plain(mut runtime: BootstrappedRuntime, args: &Args) -> Result<
             continue;
         }
 
-        match commands::handle(&input, &runtime.skills) {
+        let cmd_outcome = commands::handle(&input, &*runtime.skills.read());
+        match cmd_outcome {
             CommandOutcome::NotACommand(text) => {
                 hist.push(&text).await;
                 process_user_input(&mut runtime, &mut ctx, text, &mut reader).await?;
@@ -202,7 +203,7 @@ pub async fn run_plain(mut runtime: BootstrappedRuntime, args: &Args) -> Result<
                 neko_skills::load_skills_from_dir(&mut skills, &global_dir).await;
                 neko_skills::load_skills_from_dir(&mut skills, &cwd.join(".agents").join("skills")).await;
                 neko_skills::load_skills_from_dir(&mut skills, &cwd.join(".neko").join("skills")).await;
-                runtime.skills = std::sync::Arc::new(skills);
+                runtime.skills = std::sync::Arc::new(parking_lot::RwLock::new(skills));
                 println!("[⟳ reloaded: config + providers + skills]");
             }
             CommandOutcome::Handled => {

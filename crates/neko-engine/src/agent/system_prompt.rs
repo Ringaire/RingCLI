@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use neko_core::{build_memory_prompt, list_memory};
-use neko_core::skills::SkillRegistry;
 use neko_core::tools::ToolRegistry;
 
 /// 从 cwd 开始向上查找 `AGENTS.md`，找到后读取内容。
@@ -30,11 +29,11 @@ pub fn read_agents_md(cwd: &Path) -> Option<String> {
 /// 构建发送给 LLM 的系统提示词。
 /// 包含：身份、运行环境、cwd、git 状态、工具清单、技能清单、行为准则、Memory。
 pub async fn build_system_prompt(
-    cwd:    &Path,
-    tools:  &dyn ToolRegistry,
-    skills: &SkillRegistry,
-    model:  &str,
-    mode:   &str,
+    cwd:        &Path,
+    tools:      &dyn ToolRegistry,
+    skills_xml: &str,
+    model:      &str,
+    mode:       &str,
 ) -> String {
     let mut s = String::new();
 
@@ -96,10 +95,9 @@ pub async fn build_system_prompt(
     }
 
     // ── 技能清单（<available_skills> XML，AI 按需用 skill 工具加载）──
-    let skills_xml = skills.build_available_skills();
     if !skills_xml.is_empty() {
         s.push_str("# Skills\n");
-        s.push_str(&skills_xml);
+        s.push_str(skills_xml);
         s.push_str("\n\n");
     }
 

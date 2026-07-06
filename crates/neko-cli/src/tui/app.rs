@@ -1260,7 +1260,7 @@ async fn handle_key(
     state.suggestions = crate::repl::file_complete::maybe_suggestions(
         &state.input.value, state.input.cursor_pos, cwd,
     ).unwrap_or_else(|| {
-        crate::repl::commands::command_suggestions(&state.input.value, &runtime.skills)
+        crate::repl::commands::command_suggestions(&state.input.value, &*runtime.skills.read())
     });
     if state.suggestion_idx >= state.suggestions.len() {
         state.suggestion_idx = 0;
@@ -1295,7 +1295,8 @@ async fn handle_command(
         return CmdResult::NotCommand;
     }
 
-    match handle(text, &runtime.skills) {
+    let outcome = handle(text, &*runtime.skills.read());
+    match outcome {
         CommandOutcome::NotACommand(_) => CmdResult::NotCommand,
         CommandOutcome::RunSkill { prompt } => {
             state.chat.add_system(format!("running skill: {}", text.trim()));
@@ -1560,7 +1561,7 @@ async fn handle_command(
             neko_skills::load_skills_from_dir(&mut skills, &cwd.join(".agents").join("skills")).await;
             neko_skills::load_skills_from_dir(&mut skills, &cwd.join(".neko").join("skills")).await;
             let skill_count = skills.list().len();
-            runtime.skills = std::sync::Arc::new(skills);
+            runtime.skills = std::sync::Arc::new(parking_lot::RwLock::new(skills));
             state.chat.add_system(format!(
                 "⟳ reloaded: {provider_count} provider(s), {skill_count} skill(s)"
             ));

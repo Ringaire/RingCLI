@@ -256,7 +256,8 @@ This is a test skill.
     let runtime = result.unwrap();
 
     // 技能应该被加载（至少有内置技能）
-    let skills = runtime.skills.list();
+    let skills_guard = runtime.skills.read();
+    let skills = skills_guard.list();
     assert!(!skills.is_empty(), "skills should not be empty");
 
     // 验证测试技能是否被加载
