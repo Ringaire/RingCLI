@@ -98,6 +98,17 @@ impl ChatWidget {
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
     }
 
+    /// 滚动到顶部（Ctrl+Home）。
+    pub fn scroll_to_top(&mut self) {
+        // 设置一个足够大的值，让 render 时自动 clamp 到实际最大值
+        self.scroll_offset = usize::MAX;
+    }
+
+    /// 滚动到底部（Ctrl+End），自动跟随最新消息。
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll_offset = 0;
+    }
+
     /// 是否有实际对话内容（非纯 system 消息）。决定 welcome banner 是否显示。
     pub fn has_conversation(&self) -> bool {
         self.bubbles.iter().any(|b| b.kind != BubbleKind::System)

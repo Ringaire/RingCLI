@@ -1250,6 +1250,10 @@ async fn handle_key(
                 state.input.set(next);
             }
         }
+        KeyCode::PageUp if ctrl => { state.chat.scroll_up(30); }  // Ctrl+PgUp: 快速上翻
+        KeyCode::PageDown if ctrl => { state.chat.scroll_down(30); }  // Ctrl+PgDn: 快速下翻
+        KeyCode::Home if ctrl => { state.chat.scroll_to_top(); }  // Ctrl+Home: 跳到顶部
+        KeyCode::End if ctrl => { state.chat.scroll_to_bottom(); }  // Ctrl+End: 跳到底部
         KeyCode::PageUp => { state.chat.scroll_up(10); }
         KeyCode::PageDown => { state.chat.scroll_down(10); }
         _ => {}
