@@ -1,0 +1,24 @@
+[package]
+name        = "ring-tools"
+description = "15 个内置工具：bash、文件操作、搜索、Web、LSP、TODO、会话管理"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ring-core    = { workspace = true }
+tokio        = { workspace = true }
+tokio-util   = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+thiserror    = { workspace = true }
+reqwest      = { workspace = true }
+globset      = { workspace = true }
+ignore       = { workspace = true }
+walkdir      = { workspace = true }
+regex        = { workspace = true }
+similar      = { workspace = true }
+tracing      = { workspace = true }
+uuid         = { workspace = true }
+chrono       = { workspace = true }
+async-trait  = { workspace = true }

@@ -1,4 +1,4 @@
-# NekoCLI
+# RingCLI
 
 <div align="center">
 
@@ -8,7 +8,7 @@ English | [简体中文](README.md)
 
 (Project is in early stage, version stays 0.x.x until stable release. Follows [SemVer 2.0](https://semver.org/))
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/Ringaire/NekoCLI)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/Ringaire/RingCLI)
 [![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-orange.svg)](LICENSE)
 
@@ -24,9 +24,9 @@ An extensible terminal AI coding agent, supporting 20+ LLM providers with 17 bui
 
 ```bash
 # Build from source (requires Rust 1.85+)
-git clone https://github.com/Ringaire/NekoCLI.git
-cd NekoCLI
-cargo install --path crates/neko-cli --bin neko
+git clone https://github.com/Ringaire/RingCLI.git
+cd RingCLI
+cargo install --path crates/ring-cli --bin ring
 
 # Or run directly
 cargo run --release
@@ -36,11 +36,11 @@ cargo run --release
 
 ```bash
 # Option 1: Interactive wizard
-neko
+ring
 # Type /connect, select provider, enter API key
 
 # Option 2: Quick connect
-neko
+ring
 # /connect anthropic sk-ant-xxx
 
 # Option 3: Environment variables
@@ -49,7 +49,7 @@ export OPENAI_API_KEY="sk-xxx"
 export DEEPSEEK_API_KEY="sk-xxx"
 ```
 
-Config file at `~/.config/neko/settings.jsonc` (supports comments).
+Config file at `~/.config/ring/settings.jsonc` (supports comments).
 
 ---
 

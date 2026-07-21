@@ -1,0 +1,26 @@
+[package]
+name        = "ring-providers"
+description = "LLM Provider 适配层：Anthropic、OpenAI、Gemini、OpenAI-Compatible"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ring-core    = { workspace = true }
+tokio        = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util   = { workspace = true }
+futures-util = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+thiserror    = { workspace = true }
+reqwest      = { workspace = true }
+async-trait  = { workspace = true }
+tracing      = { workspace = true }
+base64       = { workspace = true }
+uuid         = { workspace = true }
+bytes        = { workspace = true }
+sha2         = { workspace = true }
+rand         = { workspace = true }
+url          = { workspace = true }
+chrono       = { workspace = true }

@@ -18,3 +18,6 @@ Thumbs.db
 
 # Temp
 a.out
+
+# Benchmarks (criterion-generated artifacts)
+bench_output.txt

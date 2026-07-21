@@ -1,14 +1,16 @@
 [workspace]
 resolver = "2"
-default-members = ["crates/neko-cli"]
+default-members = ["crates/ring-cli"]
 members = [
-    "crates/neko-core",
-    "crates/neko-providers",
-    "crates/neko-tools",
-    "crates/neko-mcp",
-    "crates/neko-skills",
-    "crates/neko-engine",
-    "crates/neko-cli",
+    "crates/ring-core",
+    "crates/ring-providers",
+    "crates/ring-tools",
+    "crates/ring-mcp",
+    "crates/ring-skills",
+    "crates/ring-engine",
+    "crates/ring-cli",
+    "crates/linkkit-parser",
+    "crates/ring-linkkit",
 ]
 
 [workspace.package]
@@ -27,6 +29,9 @@ futures-util   = { version = "0.3", default-features = false, features = ["std"]
 # 序列化
 serde          = { version = "1", features = ["derive"] }
 serde_json     = "1"
+
+# XML 解析
+quick-xml      = "0.36"
 
 # 错误处理
 thiserror      = "2"
@@ -52,7 +57,6 @@ tracing        = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender   = "0.2"
 async-trait    = "0.1"
-once_cell      = "1"
 parking_lot    = "0.12"
 arc-swap       = "1"
 regex          = "1"
@@ -68,13 +72,23 @@ notify         = "6"
 base64         = "0.22"
 axum           = { version = "0.8", features = ["ws"] }
 tokio-tungstenite = "0.24"
+pulldown-cmark = "0.13"
+sha2           = "0.10"
+url            = "2"
+
+# 性能基准测试
+criterion      = { version = "0.5", features = ["html_reports", "async_tokio"] }
 
 # crate 内部依赖
-neko-core      = { path = "crates/neko-core" }
-neko-providers = { path = "crates/neko-providers" }
-neko-tools     = { path = "crates/neko-tools" }
-neko-mcp       = { path = "crates/neko-mcp" }
-neko-skills    = { path = "crates/neko-skills" }
+ring-core      = { path = "crates/ring-core" }
+ring-engine    = { path = "crates/ring-engine" }
+ring-providers = { path = "crates/ring-providers" }
+ring-tools     = { path = "crates/ring-tools" }
+ring-mcp       = { path = "crates/ring-mcp" }
+ring-skills    = { path = "crates/ring-skills" }
+linkkit-parser = { path = "crates/linkkit-parser" }
+ring-linkkit   = { path = "crates/ring-linkkit" }
+ring-cli      = { path = "crates/ring-cli" }
 
 [profile.dev]
 opt-level = 0
