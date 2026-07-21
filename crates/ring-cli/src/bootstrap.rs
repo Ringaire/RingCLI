@@ -83,6 +83,26 @@ pub async fn bootstrap(args: &Args, session_id: Option<uuid::Uuid>) -> Result<Bo
     let config = ring_core::load_config(Some(&cwd)).await;
     debug!(providers = ?ring_providers::factory::summarize(&config), "config loaded");
 
+    // ── 1b. models.dev 模型元数据缓存（本地优先，后台异步刷新）──
+    // 启动时立即加载本地缓存（离线可用），后台 fetch 远程最新数据。
+    let cache_path = ring_core::session::paths::cache_dir().join("models-dev.json");
+    let local = ring_providers::models_dev::ModelsDevCache::load_cache(&cache_path);
+    debug!(models_dev_entries = local.len(), "loaded local models.dev cache");
+    ring_providers::models_dev::init_cache(local);
+    let dev_client = ring_providers::provider::build_http_client(
+        config.proxy.as_deref(),
+        ring_providers::provider::DEFAULT_CONNECT_TIMEOUT_SECS,
+    );
+    let dev_path = cache_path.clone();
+    tokio::spawn(async move {
+        let cache = ring_providers::models_dev::ModelsDevCache::fetch(&dev_client).await;
+        if !cache.is_empty() {
+            cache.save_cache(&dev_path);
+            ring_providers::models_dev::replace_cache(cache);
+            tracing::info!("models.dev metadata refreshed in background");
+        }
+    });
+
     // ── 2. 构建 provider 注册表 ──
     let bootstrap_p = ring_providers::build_registry(&config);
     let provider_registry = Arc::new(bootstrap_p.registry);

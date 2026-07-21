@@ -113,20 +113,25 @@ impl Provider for CompatibleProvider {
         let body: serde_json::Value = resp.json().await?;
 
         // OpenAI 兼容格式: { "data": [{ "id": "model-id", ... }, ...] }
+        // 合并 models.dev 元数据：有则用真实能力，无则回退默认。
         let models: Vec<ModelInfo> = body
             .get("data")
             .and_then(|d| d.as_array())
             .map(|arr| {
                 arr.iter()
                     .filter_map(|m| {
-                        m.get("id").and_then(|id| id.as_str()).map(|id| ModelInfo {
-                            id:               id.to_string(),
-                            display_name:     id.to_string(),
-                            context_window:   0,
-                            max_output_tokens: 0,
-                            supports_vision:  false,
-                            supports_thinking: false,
-                            supports_tools:   true,
+                        m.get("id").and_then(|id| id.as_str()).map(|id| {
+                            // 查 models.dev 全局缓存（裸 id）
+                            let meta = crate::models_dev::lookup_global(id);
+                            ModelInfo {
+                                id:               id.to_string(),
+                                display_name:     meta.as_ref().and_then(|x| x.display_name.clone()).unwrap_or_else(|| id.to_string()),
+                                context_window:   meta.as_ref().and_then(|x| x.context_window).unwrap_or(0),
+                                max_output_tokens: meta.as_ref().and_then(|x| x.max_output_tokens).unwrap_or(0),
+                                supports_vision:  meta.as_ref().map(|x| x.supports_vision).unwrap_or(false),
+                                supports_thinking: meta.as_ref().map(|x| x.supports_thinking).unwrap_or(false),
+                                supports_tools:   meta.as_ref().map(|x| x.supports_tools).unwrap_or(true),
+                            }
                         })
                     })
                     .collect()
