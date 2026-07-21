@@ -64,7 +64,7 @@ fn convert_messages(msgs: &[Message]) -> Value {
                                 }
                             }));
                         }
-                        ContentBlock::ToolResult { .. } | ContentBlock::Image { .. } => {}
+                        ContentBlock::ToolResult { .. } | ContentBlock::Image { .. } | ContentBlock::Thinking { .. } => {}
                     }
                 }
                 let content_val = if text_parts.is_empty() {

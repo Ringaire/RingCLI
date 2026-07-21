@@ -41,6 +41,19 @@ pub enum ContentBlock {
         media_type: String,
         data: String,
     },
+    /// 推理/思考块（Anthropic extended thinking / OpenAI reasoning）。
+    ///
+    /// 多轮回传时需保留 `signature`，否则 Anthropic 思考链断裂、第二轮 thinking 失效。
+    /// `redacted_thinking` 块以 `redacted=true` + `signature` 承载加密 data（不可读，仅回传）。
+    Thinking {
+        thinking: String,
+        /// Anthropic thinking 签名（多轮连续性必需）。redacted 块时存加密 data。
+        #[serde(rename = "signature", default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+        /// 是否为加密的 redacted_thinking（不可读，仅回传 data）。
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        redacted: bool,
+    },
 }
 
 // ── 消息角色 ─────────────────────────────────────────────────────────────────
