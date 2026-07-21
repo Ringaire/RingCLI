@@ -575,13 +575,37 @@ impl ProviderSetupModal {
                 Span::styled("Select Model", Style::default().fg(UI).add_modifier(Modifier::BOLD)),
                 Span::styled(format!("  —  {}", self.provider_id), Style::default().fg(UI)),
             ]),
-            Line::from(Span::styled(
-                format!("{} models  •  ↑↓ navigate  Enter select  Esc back", self.models.len()),
-                dim,
-            )),
+            Line::from(vec![
+                Span::styled(
+                    format!("{} models  •  ↑↓ navigate  Enter select  Esc back", self.models.len()),
+                    dim,
+                ),
+                Span::raw("  "),
+                Span::styled("V", Style::default().fg(Color::Cyan)),
+                Span::styled("=vision ", dim),
+                Span::styled("T", Style::default().fg(Color::Magenta)),
+                Span::styled("=thinking", dim),
+            ]),
         ];
         lines.extend(self.model_list.render_rows(&self.models, dim, |id, rs| {
-            Line::from(vec![pointer(rs.selected), label(rs.selected, id.clone())])
+            // 能力标记来自 models.dev + 手动 caps 合并
+            let meta = ring_providers::models_dev::resolve_meta(id);
+            let mut spans = vec![pointer(rs.selected), label(rs.selected, id.clone())];
+            if let Some(m) = &meta {
+                if m.supports_vision {
+                    spans.push(Span::styled(" V", Style::default().fg(Color::Cyan)));
+                }
+                if m.supports_thinking {
+                    spans.push(Span::styled(" T", Style::default().fg(Color::Magenta)));
+                }
+                // 上下文窗口（若已知）
+                if let Some(ctx) = m.context_window {
+                    if ctx > 0 {
+                        spans.push(Span::styled(format!("  {}k", ctx / 1000), dim));
+                    }
+                }
+            }
+            Line::from(spans)
         }));
         Paragraph::new(lines)
     }

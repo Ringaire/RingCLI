@@ -121,8 +121,8 @@ impl Provider for CompatibleProvider {
                 arr.iter()
                     .filter_map(|m| {
                         m.get("id").and_then(|id| id.as_str()).map(|id| {
-                            // 查 models.dev 全局缓存（裸 id）
-                            let meta = crate::models_dev::lookup_global(id);
+                            // 合并优先级：手动 caps > models.dev > 默认
+                            let meta = crate::models_dev::resolve_meta(id);
                             ModelInfo {
                                 id:               id.to_string(),
                                 display_name:     meta.as_ref().and_then(|x| x.display_name.clone()).unwrap_or_else(|| id.to_string()),

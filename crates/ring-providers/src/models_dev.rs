@@ -193,6 +193,41 @@ pub fn lookup_global(model_id: &str) -> Option<ModelMeta> {
     c.read().unwrap().lookup(model_id).cloned()
 }
 
+// ── 手动能力定义（覆盖 models.dev）──────────────────────────────────────────
+
+use ring_core::config::ModelCaps;
+
+static GLOBAL_CAPS: OnceLock<Arc<RwLock<HashMap<String, ModelCaps>>>> = OnceLock::new();
+
+/// 设置手动能力定义（config 加载后调用，可重复调用刷新）。
+pub fn init_caps(caps: HashMap<String, ModelCaps>) {
+    match GLOBAL_CAPS.get() {
+        Some(c) => *c.write().unwrap() = caps,
+        None    => { let _ = GLOBAL_CAPS.set(Arc::new(RwLock::new(caps))); }
+    }
+}
+
+/// 查询裸 model id 的手动能力定义。
+pub fn lookup_caps_global(model_id: &str) -> Option<ModelCaps> {
+    let c = GLOBAL_CAPS.get()?;
+    c.read().unwrap().get(model_id).cloned()
+}
+
+/// 合并优先级：手动 caps > models.dev > None。
+/// 返回最终能力（供 list_models 使用）。
+pub fn resolve_meta(model_id: &str) -> Option<ModelMeta> {
+    let mut meta = lookup_global(model_id);
+    if let Some(caps) = lookup_caps_global(model_id) {
+        let m = meta.get_or_insert_with(ModelMeta::default);
+        if let Some(v) = caps.vision   { m.supports_vision = v; }
+        if let Some(t) = caps.thinking { m.supports_thinking = t; }
+        if let Some(to) = caps.tools   { m.supports_tools = to; }
+        if let Some(c) = caps.context  { m.context_window = Some(c); }
+        if let Some(o) = caps.output   { m.max_output_tokens = Some(o); }
+    }
+    meta
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

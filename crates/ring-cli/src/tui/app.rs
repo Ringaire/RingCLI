@@ -1813,6 +1813,7 @@ async fn handle_command(
             }
             // 4. 更新配置 + 重建 catalog + system prompt
             runtime.config = resolved.clone();
+            ring_providers::models_dev::init_caps(resolved.model_caps.clone());
             runtime.rebuild_context().await;
             // 5. 刷新 MCP tools
             let mcp_count = resolved.mcp_servers.len();
@@ -1842,6 +1843,7 @@ async fn handle_command(
                 runtime.provider = runtime.provider_registry.get(&pid);
             }
             runtime.config = resolved;
+            ring_providers::models_dev::init_caps(runtime.config.model_caps.clone());
             runtime.rebuild_context().await;
             state.chat.add_system(format!("⟳ config refreshed: {provider_count} provider(s)"));
             CmdResult::Handled

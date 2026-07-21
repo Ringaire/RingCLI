@@ -89,6 +89,8 @@ pub async fn bootstrap(args: &Args, session_id: Option<uuid::Uuid>) -> Result<Bo
     let local = ring_providers::models_dev::ModelsDevCache::load_cache(&cache_path);
     debug!(models_dev_entries = local.len(), "loaded local models.dev cache");
     ring_providers::models_dev::init_cache(local);
+    // 手动能力定义（config.model_caps）
+    ring_providers::models_dev::init_caps(config.model_caps.clone());
     let dev_client = ring_providers::provider::build_http_client(
         config.proxy.as_deref(),
         ring_providers::provider::DEFAULT_CONNECT_TIMEOUT_SECS,
