@@ -133,7 +133,22 @@ pub async fn run_plain(mut runtime: BootstrappedRuntime, args: &Args) -> Result<
                 }
             }
             CommandOutcome::RefreshModel => {
-                println!("[model refresh is available in TUI mode — use /refreshmodel there]");
+                println!("[model refresh: use TUI /refresh:model to pick provider]");
+            }
+            CommandOutcome::RefreshTool => {
+                println!("[⟳ refreshing MCP tools…]");
+                runtime.ring_runtime.apply_mcp_config(&runtime.config.mcp_servers).await;
+                let n = runtime.ring_runtime.mcp_server_names().len();
+                println!("[⟳ {n} mcp server(s) active]");
+            }
+            CommandOutcome::RefreshConfig => {
+                let cwd = runtime.cwd.clone();
+                let resolved = ring_core::load_config(Some(&cwd)).await;
+                let boot = ring_providers::build_registry(&resolved);
+                runtime.provider_registry = std::sync::Arc::new(boot.registry);
+                runtime.config = resolved;
+                runtime.rebuild_context().await;
+                println!("[⟳ config refreshed]");
             }
             CommandOutcome::NewSession => {
                 let new_session = session::create_session(
@@ -208,7 +223,7 @@ pub async fn run_plain(mut runtime: BootstrappedRuntime, args: &Args) -> Result<
             }
             CommandOutcome::LoopStop => println!("[⟳ loop stopped]"),
             CommandOutcome::LoopStatus => println!("[⟳ loop status — TUI only]"),
-            CommandOutcome::Reload => {
+            CommandOutcome::RefreshAll => {
                 let cwd = runtime.cwd.clone();
                 let resolved = ring_core::load_config(Some(&cwd)).await;
                 let boot = ring_providers::build_registry(&resolved);

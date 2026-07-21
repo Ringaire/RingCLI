@@ -1730,7 +1730,7 @@ async fn handle_command(
             }
             CmdResult::Handled
         }
-        CommandOutcome::Reload => {
+        CommandOutcome::RefreshAll => {
             let cwd = std::path::PathBuf::from(&state.cwd);
             // 1. 重载配置
             let resolved = ring_core::load_config(Some(&cwd)).await;
@@ -1745,9 +1745,12 @@ async fn handle_command(
                 runtime.provider = runtime.provider_registry.get(&pid);
             }
             // 4. 更新配置 + 重建 catalog + system prompt
-            runtime.config = resolved;
+            runtime.config = resolved.clone();
             runtime.rebuild_context().await;
-            // 5. 重载 skills
+            // 5. 刷新 MCP tools
+            let mcp_count = resolved.mcp_servers.len();
+            runtime.ring_runtime.apply_mcp_config(&resolved.mcp_servers).await;
+            // 6. 重载 skills
             let mut skills = ring_core::skills::SkillRegistry::new();
             ring_skills::load_builtin_skills(&mut skills);
             let global_dir = ring_core::session::paths::skills_dir();
@@ -1757,8 +1760,30 @@ async fn handle_command(
             let skill_count = skills.list().len();
             runtime.skills = std::sync::Arc::new(parking_lot::RwLock::new(skills));
             state.chat.add_system(format!(
-                "⟳ reloaded: {provider_count} provider(s), {skill_count} skill(s)"
+                "⟳ refreshed: {provider_count} provider(s), {mcp_count} mcp server(s), {skill_count} skill(s)"
             ));
+            CmdResult::Handled
+        }
+        CommandOutcome::RefreshConfig => {
+            let cwd = std::path::PathBuf::from(&state.cwd);
+            let resolved = ring_core::load_config(Some(&cwd)).await;
+            let provider_count = resolved.providers.len();
+            let boot = ring_providers::build_registry(&resolved);
+            let current_pid = runtime.provider.as_ref().map(|p| p.id().to_string());
+            runtime.provider_registry = std::sync::Arc::new(boot.registry);
+            if let Some(pid) = current_pid {
+                runtime.provider = runtime.provider_registry.get(&pid);
+            }
+            runtime.config = resolved;
+            runtime.rebuild_context().await;
+            state.chat.add_system(format!("⟳ config refreshed: {provider_count} provider(s)"));
+            CmdResult::Handled
+        }
+        CommandOutcome::RefreshTool => {
+            let mcp_count = runtime.config.mcp_servers.len();
+            runtime.ring_runtime.apply_mcp_config(&runtime.config.mcp_servers).await;
+            let loaded = runtime.ring_runtime.mcp_server_names().len();
+            state.chat.add_system(format!("⟳ tools refreshed: {loaded}/{mcp_count} mcp server(s) active"));
             CmdResult::Handled
         }
         CommandOutcome::Handled => {
