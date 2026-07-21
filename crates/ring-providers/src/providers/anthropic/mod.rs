@@ -34,6 +34,10 @@ const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 const ANTHROPIC_BETA_TOOLS: &str = "tools-2024-04-04";
 const ANTHROPIC_BETA_THINKING: &str = "interleaved-thinking-2025-05-14";
+/// Claude Code OAuth 伪装常量（对齐 Pi createClient OAuth 分支）。
+const ANTHROPIC_BETA_CLAUDE_CODE: &str = "claude-code-20250219";
+const ANTHROPIC_BETA_OAUTH: &str = "oauth-2025-04-20";
+const CLAUDE_CODE_VERSION: &str = "2.1.75";
 const CONNECT_TIMEOUT_SECS: u64 = 10;
 const DEFAULT_MODEL: &str = "claude-opus-4-5";
 
@@ -198,6 +202,12 @@ fn is_adaptive_thinking_model(model: &str) -> bool {
         || m.contains("claude-opus-4-5") // Opus 4.5 也支持 adaptive
 }
 
+/// 判断 api_key 是否为 OAuth token（对齐 Pi isOAuthToken）。
+/// OAuth token 形如 `sk-ant-oat...`，需用 Bearer + Claude Code 伪装头。
+fn is_oauth_token(key: &str) -> bool {
+    key.contains("sk-ant-oat")
+}
+
 // ── AnthropicProvider ─────────────────────────────────────────────────────────
 
 pub struct AnthropicProvider {
@@ -248,10 +258,7 @@ impl AnthropicProvider {
     async fn fetch_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
         let url = format!("{}/v1/models?limit=1000", self.base_url);
         let resp = self
-            .client
-            .get(&url)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_API_VERSION)
+            .apply_headers(self.client.get(&url), ANTHROPIC_BETA_TOOLS)
             .send()
             .await?;
 
@@ -379,6 +386,24 @@ impl AnthropicProvider {
         betas.join(",")
     }
 
+    /// 构造请求头。OAuth token 时切 Bearer + Claude Code 伪装（对齐 Pi createClient）。
+    fn apply_headers(&self, builder: reqwest::RequestBuilder, betas: &str) -> reqwest::RequestBuilder {
+        let oauth = is_oauth_token(&self.api_key);
+        let mut b = builder.header("anthropic-version", ANTHROPIC_API_VERSION);
+        if oauth {
+            b = b
+                .header("authorization", format!("Bearer {}", self.api_key))
+                .header("anthropic-beta", format!("{},{},{}", ANTHROPIC_BETA_CLAUDE_CODE, ANTHROPIC_BETA_OAUTH, betas))
+                .header("user-agent", format!("claude-cli/{}", CLAUDE_CODE_VERSION))
+                .header("x-app", "cli");
+        } else {
+            b = b
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-beta", betas);
+        }
+        b
+    }
+
 }
 
 #[async_trait]
@@ -394,12 +419,10 @@ impl Provider for AnthropicProvider {
 
         debug!(model = %req.model, "anthropic chat request");
 
-        let http_req = self.client
-            .post(&url)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_API_VERSION)
-            .header("anthropic-beta", &betas)
-            .json(&body);
+        let http_req = self.apply_headers(
+            self.client.post(&url).json(&body),
+            &betas,
+        );
 
         let resp = tokio::select! {
             r = http_req.send() => r.map_err(ProviderError::Network)?,
@@ -444,13 +467,12 @@ impl Provider for AnthropicProvider {
 
         debug!(model = %req.model, "anthropic stream request");
 
-        let http_req = self.client
-            .post(&url)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_API_VERSION)
-            .header("anthropic-beta", &betas)
-            .header("Accept", "text/event-stream")
-            .json(&body);
+        let http_req = self.apply_headers(
+            self.client.post(&url)
+                .header("Accept", "text/event-stream")
+                .json(&body),
+            &betas,
+        );
 
         let resp = tokio::select! {
             r = http_req.send() => r.map_err(ProviderError::Network)?,
@@ -662,6 +684,18 @@ mod tests {
             description: "test tool".into(),
             input_schema: json!({"type": "object", "properties": {}}),
         }
+    }
+
+    // ── adaptive thinking 检测 ──────────────────────────────────────────────
+
+    #[test]
+    fn test_is_oauth_token_detection() {
+        // OAuth token
+        assert!(is_oauth_token("sk-ant-oat01-xxxxxxxx"));
+        // 普通 API key
+        assert!(!is_oauth_token("sk-ant-api03-xxxxxxxx"));
+        assert!(!is_oauth_token("sk-ant-xxxxxxxx"));
+        assert!(!is_oauth_token(""));
     }
 
     // ── adaptive thinking 检测 ──────────────────────────────────────────────
