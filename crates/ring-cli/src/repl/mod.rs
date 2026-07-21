@@ -120,28 +120,20 @@ pub async fn run_plain(mut runtime: BootstrappedRuntime, args: &Args) -> Result<
             CommandOutcome::ShowEffort => {
                 println!("[current effort: see /effort to set]");
             }
-            CommandOutcome::Logout(provider_id) => {
-                match provider_id {
-                    Some(id) => {
-                        let cwd = runtime.session.meta.cwd.clone();
-                        match crate::connect::logout_provider(&mut runtime, &cwd, &id).await {
-                            Ok(_)  => println!("[logged out: {id}]"),
-                            Err(e) => println!("[logout failed: {e}]"),
-                        }
-                    }
-                    None => {
-                        // 无参数 → 列出已存储凭据
-                        let creds = crate::connect::list_stored_credentials();
-                        if creds.is_empty() {
-                            println!("[no stored credentials; /logout only clears keys saved by /connect]");
-                        } else {
-                            println!("[stored credentials — /logout <id> to remove]:");
-                            for (id, display) in creds {
-                                println!("  {id:<16} {display}");
-                            }
-                        }
+            CommandOutcome::Logout => {
+                // plain REPL：列出已存储凭据，提示用 /logout 选择
+                let creds = crate::connect::list_stored_credentials();
+                if creds.is_empty() {
+                    println!("[no stored credentials]");
+                } else {
+                    println!("[stored credentials — use TUI /logout to remove, or /connect to reconfigure]:");
+                    for (id, display) in creds {
+                        println!("  {id:<16} {display}");
                     }
                 }
+            }
+            CommandOutcome::RefreshModel => {
+                println!("[model refresh is available in TUI mode — use /refreshmodel there]");
             }
             CommandOutcome::NewSession => {
                 let new_session = session::create_session(

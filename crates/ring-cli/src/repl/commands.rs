@@ -32,11 +32,12 @@ pub const COMMANDS: &[CommandMeta] = &[
     CommandMeta { name: "help",     description: "Show command list",                     arg_hint: None },
     CommandMeta { name: "mode",     description: "Switch permission mode",                arg_hint: Some("ask|edit|plan|build|agent") },
     CommandMeta { name: "model",    description: "Show or switch model",                  arg_hint: Some("[provider/model-id]") },
-    CommandMeta { name: "connect",  description: "Configure provider connection",         arg_hint: Some("[provider] [key] [url]") },
+    CommandMeta { name: "connect",       description: "Configure provider (wizard)",          arg_hint: None },
     CommandMeta { name: "think",    description: "Control extended thinking (on/off/budget)", arg_hint: Some("on|off [budget]") },
     CommandMeta { name: "thinking", description: "Toggle reasoning process display (fold/expand)", arg_hint: None },
     CommandMeta { name: "effort",   description: "Set or cycle reasoning effort level",     arg_hint: Some("[off|minimal|low|medium|high|xhigh|max]") },
-    CommandMeta { name: "logout",  description: "Remove stored provider credentials",  arg_hint: Some("[provider]") },
+    CommandMeta { name: "logout",        description: "Remove stored provider credentials",    arg_hint: None },
+    CommandMeta { name: "refreshmodel",  description: "Refresh model list for a provider",    arg_hint: None },
     CommandMeta { name: "resume",   description: "Resume / manage saved sessions",        arg_hint: Some("[sessions|ls|<session-uuid>]") },
     CommandMeta { name: "compact",  description: "Summarize & compact the conversation",  arg_hint: None },
     CommandMeta { name: "clear",    description: "Clear the screen / chat",               arg_hint: None },
@@ -95,8 +96,10 @@ pub enum CommandOutcome {
     SetEffort(String),
     /// 显示当前 effort 级别。
     ShowEffort,
-    /// 登出 provider（清除 api_key）。无参数 = 打开选择器。
-    Logout(Option<String>),
+    /// 登出 provider（打开选择器）。
+    Logout,
+    /// 刷新模型列表（无参数，打开 provider 选择器）。
+    RefreshModel,
     /// 清屏 / 清空对话。
     Clear,
     /// 压缩上下文。
@@ -173,17 +176,7 @@ pub fn handle(text: &str, skills: &SkillRegistry) -> CommandOutcome {
                 CommandOutcome::SwitchModel(rest.to_string())
             }
         }
-        "connect" => {
-            let mut parts = rest.split_whitespace();
-            match parts.next() {
-                None => CommandOutcome::OpenProviderSetup,
-                Some(provider) => CommandOutcome::QuickConnect {
-                    provider: provider.to_lowercase(),
-                    api_key:  parts.next().map(str::to_string),
-                    base_url: parts.next().map(str::to_string),
-                },
-            }
-        }
+        "connect" => CommandOutcome::OpenProviderSetup,
         "think" => {
             let mut parts = rest.split_whitespace();
             let sub = parts.next().unwrap_or("").to_lowercase();
@@ -280,14 +273,8 @@ pub fn handle(text: &str, skills: &SkillRegistry) -> CommandOutcome {
             CommandOutcome::LoopStart { goal, max_turns }
         }
         "quit" => CommandOutcome::Quit,
-        "logout" => {
-            let arg = rest.trim();
-            if arg.is_empty() {
-                CommandOutcome::Logout(None)
-            } else {
-                CommandOutcome::Logout(Some(arg.to_string()))
-            }
-        }
+        "logout" => CommandOutcome::Logout,
+        "refreshmodel" | "refresh-model" | "refresh" => CommandOutcome::RefreshModel,
         "reload" => CommandOutcome::Reload,
         // 其余：尝试作为技能名。
         other => {

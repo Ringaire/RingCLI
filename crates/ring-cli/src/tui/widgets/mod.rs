@@ -5,6 +5,7 @@ pub mod chat;
 pub mod effort_picker;
 pub mod input;
 pub mod logout_picker;
+pub mod refresh_model_picker;
 pub mod markdown;
 pub mod mode_picker;
 pub mod model_picker;
