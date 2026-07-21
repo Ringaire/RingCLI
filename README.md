@@ -12,9 +12,9 @@
 [![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-orange.svg)](LICENSE)
 
-一个可扩展的终端 AI 编程助手，支持 20+ LLM 服务商，内置 17 个开发工具
+一个可扩展的终端 AI 编程助手，支持 **34 个 LLM 服务商**，内置 17 个开发工具
 
-[功能](#功能) • [安装](#安装) • [命令](#命令) • [Provider](#支持的-provider) • [路线图](#路线图)
+[功能](#功能) • [安装](#安装) • [命令](#命令) • [Provider](#支持的-provider) • [配置](#配置目录) • [路线图](#路线图)
 
 </div>
 
@@ -49,20 +49,22 @@ export OPENAI_API_KEY="sk-xxx"
 export DEEPSEEK_API_KEY="sk-xxx"
 ```
 
-配置文件位于 `~/.config/ring/settings.jsonc`（支持注释）。
+配置文件位于 `~/.ring/config/settings.jsonc`（支持注释）。
 
 ---
 
 ## 功能
 
-- 🤖 **20+ Provider** — Anthropic / OpenAI / Gemini / DeepSeek / 智谱 / Groq / Ollama 等，OpenAI OAuth2 登录
+- 🤖 **34 个 Provider** — Anthropic / OpenAI / Gemini / DeepSeek / 智谱 / 通义千问 / MiniMax / 小米 / HuggingFace / Cloudflare 等，OpenAI OAuth2 登录
 - 🛠️ **17 个内置工具** — bash、文件读写编辑、搜索、Web、LSP、TODO、会话管理
 - 🎭 **多 Agent 编排** — 子 agent 派生 + role-based 选模 + 视图分离
-- 🔐 **权限四档** — Ask（只读）→ Edit（改码）→ Build（全开）→ Agent（自主）
-- 🧠 **思考程度** — `/effort low|medium|high|max`，`/thinking` 折叠推理过程
+- 🔐 **权限五档** — Ask（只读）→ Edit（改码）→ Plan（规划）→ Build（全开）→ Agent（自主）
+- 🧠 **七级思考程度** — `/effort off|minimal|low|medium|high|xhigh|max`，下拉菜单 + `Shift+Tab` 循环
+- 📝 **可编排 Prompt** — SKILL.md 支持 `$1` `$@` `${N:-default}` `${@:N}` 参数替换
+- 📂 **项目级配置** — `.ring/` 目录：SYSTEM.md / APPEND_SYSTEM.md / tool.json / mode / doc
 - 📦 **会话持久化** — JSONL 存储 + 上下文自动压缩
-- 🔌 **MCP 兼容** — 共用 Claude Code 的 `.mcp.json`
-- 🧩 **Skill 系统** — SKILL.md（Markdown + frontmatter），检索 `.agents/skills/`
+- 🔌 **MCP 兼容** — `tool.json` / `mcp_server.json` / `.mcp.json`，多路径发现
+- 🧩 **Skill / Doc 系统** — SKILL.md（Markdown + frontmatter），兼容 `.agents/skills/` 与 `.ring/doc/`
 - 🖥️ **TUI 终端界面** — Ratatui + 自实现 Markdown 渲染 + 宽度感知换行
 
 ---
@@ -74,9 +76,10 @@ export DEEPSEEK_API_KEY="sk-xxx"
 | 命令 | 说明 |
 |------|------|
 | `/connect` | 配置 provider（向导 / 快速连接 / ChatGPT OAuth2） |
+| `/logout` | 移除已存储的 provider 凭据（下拉选择 / `/logout <provider>`） |
 | `/model` | 模型选择器（跨 provider 分组 + 搜索） |
 | `/mode` | 权限模式选择器（ask/edit/plan/build/agent） |
-| `/effort` | 思考程度（low/medium/high/max） |
+| `/effort` | 思考程度下拉菜单（off/minimal/low/medium/high/xhigh/max） |
 | `/think` | Extended thinking（on/off [budget]） |
 | `/thinking` | 折叠/展开推理过程 |
 | `/sessions` | 会话管理 |
@@ -89,8 +92,11 @@ export DEEPSEEK_API_KEY="sk-xxx"
 | 键 | 说明 |
 |----|------|
 | `↑` `↓` | 多行光标移动 / 历史（空输入时） |
-| `Ctrl+↑` `Ctrl+↓` | 子 agent 视图切换 |
 | `Tab` | 补全接受 / 权限模式切换 |
+| **`Shift+Tab`** | **循环思考程度**（off→minimal→low→medium→high→xhigh→max） |
+| `Ctrl+T` | 开关 extended thinking |
+| `Ctrl+O` | 折叠/展开推理过程 |
+| `Ctrl+↑` `Ctrl+↓` | 子 agent 视图切换 |
 | `Alt+↑` `Alt+↓` | 聊天滚动 |
 | `Alt+Enter` | 多行输入 |
 | `@path` | 文件引用 |
@@ -108,19 +114,86 @@ export DEEPSEEK_API_KEY="sk-xxx"
 | **DeepSeek / Groq / Mistral / Together / OpenRouter / xAI** | OpenAI 兼容 |
 | **Moonshot / SiliconFlow / Zhipu / Baidu / NVIDIA** | OpenAI 兼容 |
 | **Cerebras / DeepInfra / Fireworks / Perplexity / Cohere** | OpenAI 兼容 |
+| **HuggingFace / MiniMax / MiniMax-CN / Qwen / Qwen-CN** | OpenAI 兼容 |
+| **Xiaomi / Xiaomi-AMS / Xiaomi-SGP / ZAI / ZAI-CN / Ant-Ling** | OpenAI 兼容 |
+| **Cloudflare-Workers / Cloudflare-Gateway / Vercel-Gateway / OpenCode** | OpenAI 兼容 |
 | **Ollama / LM Studio** | 本地模型（无需 key） |
 | **Custom** | 任意 OpenAI 兼容 API |
 
 ---
 
+## 配置目录
+
+### 全局（`~/.ring/`）
+
+```
+~/.ring/
+├── config/
+│   ├── settings.jsonc       # 主配置（支持注释）
+│   ├── providers.json       # provider 覆盖
+│   ├── tool.json            # MCP 工具（新统一格式）
+│   ├── mcp_server.json      # MCP 工具（旧格式兼容）
+│   ├── .mcp.json            # Claude Code 兼容
+│   ├── SYSTEM.md            # 自定义系统提示词（替换默认）
+│   └── APPEND_SYSTEM.md     # 追加系统提示词
+├── skills/                  # 全局技能
+├── doc/                     # 全局文档（skill 新命名）
+├── prompts/                 # 提示词模板
+├── mode/                    # 模式定义
+└── sessions/                # 会话存储（JSONL）
+```
+
+### 项目级（`./.ring/`，优先级高于全局）
+
+```
+./.ring/
+├── settings.jsonc           # 项目配置
+├── tool.json                # 项目 MCP 工具
+├── mcp_server.json          # 项目 MCP 工具（旧格式）
+├── .mcp.json                # Claude Code 兼容
+├── SYSTEM.md                # 项目自定义系统提示词
+├── APPEND_SYSTEM.md         # 项目追加系统提示词
+├── skills/                  # 项目技能
+├── doc/                     # 项目文档
+├── mode/                    # 项目模式定义
+│   └── {mode}.md            # 模式提示词
+└── workflow.json            # 模型编排（规划中）
+```
+
+### 上下文文件发现（优先级高 → 低）
+
+RingCLI 会自动发现并注入以下文件到系统提示词：
+
+| 文件 | 说明 | 发现方式 |
+|------|------|---------|
+| `AGENTS.md` | 项目指令 | 从 cwd 向上遍历至 git 根 |
+| `CLAUDE.md` | 兼容 Pi / Claude Code | 从 cwd 向上遍历至 git 根 |
+| `.ring/SYSTEM.md` | 自定义系统提示词 | 项目级 > 全局 |
+| `.ring/APPEND_SYSTEM.md` | 追加到系统提示词末尾 | 项目级 > 全局 |
+
+### MCP 工具配置发现（优先级高 → 低）
+
+按以下顺序合并（近覆盖远）：
+
+1. `cwd/tool.json` — 工作目录新格式
+2. `cwd/mcp_server.json` — 工作目录旧格式
+3. `cwd/.mcp.json` — Claude Code 兼容（向上遍历）
+4. `cwd/.ring/{tool,mcp_server,.mcp}.json` — 项目 `.ring/`
+5. `~/.ring/config/{tool,mcp_server,.mcp}.json` — 全局
+
+---
+
 ## 路线图
 
-- [x] 多 Provider + OAuth2
-- [x] 17 个内置工具 + MCP 兼容
+- [x] 多 Provider + OAuth2（34 个）
+- [x] 17 个内置工具 + MCP 兼容（多路径发现）
 - [x] 多 Agent 编排 + 视图分离
-- [x] 权限四档 + 思考程度
-- [x] Skill 系统（SKILL.md）
+- [x] 权限五档 + 七级思考程度
+- [x] Skill / Doc 系统（SKILL.md + 参数替换）
+- [x] 项目级 `.ring/` 配置 + SYSTEM.md / APPEND_SYSTEM.md
 - [x] 自实现 Markdown 渲染
+- [ ] `.ring/mode/{mode}.md` 模式系统
+- [ ] `.ring/workflow.json` 模型编排
 - [ ] API Key 轮询
 - [ ] 文件变更检测（Snapshot）
 - [ ] VSCode 扩展
