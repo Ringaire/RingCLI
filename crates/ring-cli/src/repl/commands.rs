@@ -41,6 +41,7 @@ pub const COMMANDS: &[CommandMeta] = &[
     CommandMeta { name: "refresh:config",  description: "Refresh provider config + registry",         arg_hint: None },
     CommandMeta { name: "refresh:model",   description: "Refresh model list cache for a provider",    arg_hint: None },
     CommandMeta { name: "refresh:tool",    description: "Refresh MCP tool list",                     arg_hint: None },
+    CommandMeta { name: "setting",      description: "Open settings panel",                       arg_hint: None },
     CommandMeta { name: "resume",   description: "Resume / manage saved sessions",        arg_hint: Some("[sessions|ls|<session-uuid>]") },
     CommandMeta { name: "compact",  description: "Summarize & compact the conversation",  arg_hint: None },
     CommandMeta { name: "clear",    description: "Clear the screen / chat",               arg_hint: None },
@@ -108,6 +109,8 @@ pub enum CommandOutcome {
     RefreshConfig,
     /// 刷新全部（config + provider + tools + skills）。
     RefreshAll,
+    /// 打开设置面板。
+    Settings,
     /// 清屏 / 清空对话。
     Clear,
     /// 压缩上下文。
@@ -284,6 +287,7 @@ pub fn handle(text: &str, skills: &SkillRegistry) -> CommandOutcome {
         "refreshtool" | "refresh:tool" => CommandOutcome::RefreshTool,
         "refreshconfig" | "refresh:config" => CommandOutcome::RefreshConfig,
         "refresh" | "refresh:all" | "reload" => CommandOutcome::RefreshAll,
+        "setting" | "settings" => CommandOutcome::Settings,
         // 其余：尝试作为技能名。
         other => {
             if let Some(skill) = skills.get(other) {

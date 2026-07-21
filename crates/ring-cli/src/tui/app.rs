@@ -38,6 +38,7 @@ use super::widgets::{
     effort_picker::EffortPickerModal,
     logout_picker::LogoutPickerModal,
     refresh_model_picker::RefreshModelPickerModal,
+    settings_picker::{SettingsPickerModal, SettingsSnapshot, SettingKind},
     model_picker::ModelPickerModal,
     permission::PermissionModal,
     provider_setup::{ProviderRow, ProviderSetupModal, SetupAction},
@@ -83,6 +84,7 @@ struct AppState {
     effort_picker:    Option<EffortPickerModal>,
     logout_picker:    Option<LogoutPickerModal>,
     refresh_model_picker: Option<RefreshModelPickerModal>,
+    settings_picker:      Option<SettingsPickerModal>,
     provider_setup:   Option<ProviderSetupModal>,
     signal:           Option<CancellationToken>,
     status_msg:       Option<String>,
@@ -148,6 +150,7 @@ impl AppState {
             effort_picker:    None,
             logout_picker:    None,
             refresh_model_picker: None,
+            settings_picker:      None,
             provider_setup:   None,
             signal:           None,
             status_msg:       None,
@@ -476,7 +479,7 @@ async fn handle_term_event(
                 } else if let Some(picker) = &mut state.model_picker {
                     // model picker 激活：粘贴到搜索过滤器
                     picker.append_filter(&text);
-                } else if state.mode_picker.is_none() && state.session_picker.is_none() && state.effort_picker.is_none() && state.logout_picker.is_none() && state.refresh_model_picker.is_none() {
+                } else if state.mode_picker.is_none() && state.session_picker.is_none() && state.effort_picker.is_none() && state.logout_picker.is_none() && state.refresh_model_picker.is_none() && state.settings_picker.is_none() {
                     // 正常输入框
                     let processed = crate::repl::file_complete::process_paste(&text);
                     state.input.insert_str(&processed);
@@ -521,6 +524,10 @@ async fn handle_term_event(
             // 模型刷新选择器优先处理按键
             if state.refresh_model_picker.is_some() {
                 return handle_refresh_model_picker_key(ke, runtime, state).await;
+            }
+            // 设置面板优先处理按键
+            if state.settings_picker.is_some() {
+                return handle_settings_picker_key(ke, runtime, state).await;
             }
             handle_key(ke, runtime, ctx, state, history, perm_tx, done_tx, picker_tx).await
         }
@@ -803,6 +810,66 @@ async fn handle_refresh_model_picker_key(
         }
         KeyCode::Esc => {
             state.refresh_model_picker = None;
+        }
+        _ => {}
+    }
+    Control::Continue
+}
+
+/// 设置面板按键处理：boolean 项 toggle，enum 项开子 picker。
+async fn handle_settings_picker_key(
+    ke:      KeyEvent,
+    runtime: &mut BootstrappedRuntime,
+    state:   &mut AppState,
+) -> Control {
+    match ke.code {
+        KeyCode::Up => {
+            if let Some(picker) = &mut state.settings_picker {
+                picker.move_up();
+            }
+        }
+        KeyCode::Down => {
+            if let Some(picker) = &mut state.settings_picker {
+                picker.move_down();
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(picker) = state.settings_picker.as_mut() {
+                let kind = picker.current_kind();
+                match kind {
+                    // toggle 项：直接切换 + 同步 state + 提示
+                    SettingKind::ToggleThinking => {
+                        picker.toggle(kind);
+                        state.think_enabled = picker.snapshot().think_enabled;
+                        let msg = if state.think_enabled { "thinking: ON" } else { "thinking: OFF" };
+                        state.chat.add_system(msg);
+                    }
+                    SettingKind::ToggleShowThinking => {
+                        picker.toggle(kind);
+                        state.think_show = picker.snapshot().think_show;
+                        let msg = if state.think_show { "thinking: show" } else { "thinking: hide" };
+                        state.chat.add_system(msg);
+                    }
+                    SettingKind::ToggleTokenCount => {
+                        picker.toggle(kind);
+                        state.show_token_count = picker.snapshot().show_token_count;
+                        let msg = if state.show_token_count { "token count: ON" } else { "token count: OFF" };
+                        state.chat.add_system(msg);
+                    }
+                    // enum 项：关闭 setting，开子 picker
+                    SettingKind::OpenEffort => {
+                        state.settings_picker = None;
+                        state.effort_picker = Some(EffortPickerModal::new(state.effort.clone()));
+                    }
+                    SettingKind::OpenMode => {
+                        state.settings_picker = None;
+                        state.mode_picker = Some(ModePickerModal::new(runtime.mode));
+                    }
+                }
+            }
+        }
+        KeyCode::Esc => {
+            state.settings_picker = None;
         }
         _ => {}
     }
@@ -1625,6 +1692,18 @@ async fn handle_command(
             state.refresh_model_picker = Some(RefreshModelPickerModal::new(entries));
             CmdResult::Handled
         }
+        CommandOutcome::Settings => {
+            // 从当前状态构造快照
+            let snap = SettingsSnapshot {
+                effort:           state.effort.clone().unwrap_or_else(|| "off".into()),
+                mode:             state.mode.clone(),
+                think_enabled:    state.think_enabled,
+                think_show:       state.think_show,
+                show_token_count: state.show_token_count,
+            };
+            state.settings_picker = Some(SettingsPickerModal::new(snap));
+            CmdResult::Handled
+        }
         CommandOutcome::NewSession => {
             let new_session = ring_core::session::create_session(
                 runtime.session.meta.cwd.clone(),
@@ -2062,7 +2141,7 @@ fn draw<B: ratatui::backend::Backend>(term: &mut Terminal<B>, state: &mut AppSta
         // ── 确定 footer zone 四态（审核 > 选择 > 通知 > 提醒）──────────────────
         let show_suggestions = !state.suggestions.is_empty() && state.pending.is_none()
             && state.session_picker.is_none() && state.model_picker.is_none()
-            && state.mode_picker.is_none() && state.effort_picker.is_none() && state.logout_picker.is_none() && state.refresh_model_picker.is_none()
+            && state.mode_picker.is_none() && state.effort_picker.is_none() && state.logout_picker.is_none() && state.refresh_model_picker.is_none() && state.settings_picker.is_none()
             && state.provider_setup.is_none();
 
         let token_pct = if state.show_token_count && state.tokens > 0 && state.context_window > 0 {
@@ -2142,6 +2221,8 @@ fn draw<B: ratatui::backend::Backend>(term: &mut Terminal<B>, state: &mut AppSta
             frame.render_widget(picker.render(), zone_area);
         } else if let Some(picker) = &state.refresh_model_picker {
             frame.render_widget(picker.render(), zone_area);
+        } else if let Some(picker) = &state.settings_picker {
+            frame.render_widget(picker.render(), zone_area);
         } else if let Some(picker) = &state.session_picker {
             frame.render_widget(picker.render(state.rename_input.as_ref(), state.session_action.as_ref()), zone_area);
         } else if let Some(setup) = &state.provider_setup {
@@ -2162,7 +2243,7 @@ fn draw<B: ratatui::backend::Backend>(term: &mut Terminal<B>, state: &mut AppSta
 
         // cursor（picker/向导/权限激活时隐藏；仅 suggestions 时仍在输入框内）
         if state.pending.is_none() && state.session_picker.is_none()
-            && state.model_picker.is_none() && state.mode_picker.is_none() && state.effort_picker.is_none() && state.logout_picker.is_none() && state.refresh_model_picker.is_none()
+            && state.model_picker.is_none() && state.mode_picker.is_none() && state.effort_picker.is_none() && state.logout_picker.is_none() && state.refresh_model_picker.is_none() && state.settings_picker.is_none()
             && state.provider_setup.is_none()
         {
             let (cx, cy) = state.input.cursor_screen_pos(input_area);
@@ -2171,7 +2252,7 @@ fn draw<B: ratatui::backend::Backend>(term: &mut Terminal<B>, state: &mut AppSta
 
         // 任务面板（Ctrl+T）：无下拉菜单时锚定输入框上方
         let no_menu = state.pending.is_none() && state.model_picker.is_none()
-            && state.mode_picker.is_none() && state.effort_picker.is_none() && state.logout_picker.is_none() && state.refresh_model_picker.is_none()
+            && state.mode_picker.is_none() && state.effort_picker.is_none() && state.logout_picker.is_none() && state.refresh_model_picker.is_none() && state.settings_picker.is_none()
             && state.session_picker.is_none() && state.provider_setup.is_none()
             && !show_suggestions;
         if no_menu && state.show_tasks && !state.tasks.is_empty() {
