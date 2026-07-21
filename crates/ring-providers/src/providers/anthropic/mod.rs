@@ -172,8 +172,30 @@ fn parse_stop_reason(s: Option<&str>) -> StopReason {
         Some("tool_use")       => StopReason::ToolUse,
         Some("max_tokens")     => StopReason::MaxTokens,
         Some("stop_sequence")  => StopReason::StopSequence,
+        Some("pause_turn")     => StopReason::Other, // Claude 4.5+ pause_turn
         _                      => StopReason::EndTurn,
     }
+}
+
+/// 启发式判断是否为 adaptive thinking 模型（Claude Opus 4.6+ / Sonnet 4.5+ / Fable / Mythos）。
+///
+/// adaptive 模型用 `output_config.effort` 控制思考程度，不支持 `budget_tokens`。
+/// 旧模型（Opus 4 / Sonnet 4 / Haiku 等）用 budget-based thinking。
+///
+/// 对齐 Pi 的 `model.compat.forceAdaptiveThinking` 元数据判断——Ring 暂无模型元数据系统，
+/// 用 model id 包含匹配覆盖已知 adaptive 模型。
+fn is_adaptive_thinking_model(model: &str) -> bool {
+    let m = model.to_lowercase();
+    // 已知 adaptive thinking 模型
+    m.contains("opus-4-6")
+        || m.contains("opus-4-7")
+        || m.contains("opus-4-8")
+        || m.contains("sonnet-4-5")
+        || m.contains("sonnet-4-6")
+        || m.contains("sonnet-4-7")
+        || m.contains("fable")
+        || m.contains("mythos")
+        || m.contains("claude-opus-4-5") // Opus 4.5 也支持 adaptive
 }
 
 // ── AnthropicProvider ─────────────────────────────────────────────────────────
@@ -255,37 +277,103 @@ impl AnthropicProvider {
     }
 
     fn build_body(&self, req: &ChatRequest, stream: bool) -> Value {
+        let cache_marker = json!({ "type": "ephemeral" });
+        let adaptive = is_adaptive_thinking_model(&req.model);
+        // thinking 启用条件：显式 extended_thinking，或设置了 reasoning_effort
+        let thinking_enabled = req.extended_thinking || req.reasoning_effort.is_some();
+
         let mut body = json!({
             "model":      req.model,
             "messages":   convert_messages(&req.messages),
             "max_tokens": req.max_tokens,
             "stream":     stream,
         });
+
+        // ── system prompt：数组格式 + cache_control（prompt caching 关键）──
+        // 对齐 Pi：system 作为 [{type:"text", text, cache_control}] 传输，打缓存标记。
         if let Some(sys) = &req.system {
-            body["system"] = Value::String(sys.clone());
+            body["system"] = json!([{
+                "type":           "text",
+                "text":           sys,
+                "cache_control":  cache_marker,
+            }]);
         }
+
+        // ── tools：末尾 tool 打 cache_control ──
         if !req.tools.is_empty() {
-            body["tools"] = convert_tools(&req.tools);
+            let mut tools = convert_tools(&req.tools);
+            if let Some(arr) = tools.as_array_mut() {
+                if let Some(last) = arr.last_mut() {
+                    last["cache_control"] = cache_marker.clone();
+                }
+            }
+            body["tools"] = tools;
         }
-        if let Some(t) = req.temperature {
-            body["temperature"] = json!(t);
+
+        // ── 末尾 user message 的末尾 content block 打 cache_control（对话缓存）──
+        // 对齐 Pi：缓存最近对话轮次，避免重复付费。
+        if let Some(msgs) = body["messages"].as_array_mut() {
+            for msg in msgs.iter_mut().rev() {
+                if msg["role"].as_str() == Some("user") {
+                    if let Some(content) = msg["content"].as_array_mut() {
+                        if let Some(last_block) = content.last_mut() {
+                            last_block["cache_control"] = cache_marker.clone();
+                        }
+                    }
+                    break;
+                }
+            }
         }
-        if let Some(p) = req.top_p {
-            body["top_p"] = json!(p);
+
+        // ── temperature/top_p：与 extended thinking 互斥（Anthropic API 约束）──
+        // 对齐 Pi：thinking 启用时不发 temperature，否则 API 报错。
+        if !thinking_enabled {
+            if let Some(t) = req.temperature {
+                body["temperature"] = json!(t);
+            }
+            if let Some(p) = req.top_p {
+                body["top_p"] = json!(p);
+            }
         }
+
         if !req.stop.is_empty() {
             body["stop_sequences"] = json!(req.stop);
         }
-        if req.extended_thinking {
-            let budget = req.thinking_budget.unwrap_or(DEFAULT_THINKING_BUDGET);
-            body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+
+        // ── thinking 构造：adaptive（新模型 + effort）优先，其次 budget（旧模型）──
+        // 对齐 Pi buildParams：
+        //   - adaptive 模型 + effort → {type:"adaptive", display} + output_config.effort
+        //   - 旧模型 + budget       → {type:"enabled", budget_tokens}
+        if thinking_enabled {
+            if adaptive {
+                body["thinking"] = json!({ "type": "adaptive", "display": "summarized" });
+                if let Some(effort) = &req.reasoning_effort {
+                    body["output_config"] = json!({ "effort": effort });
+                }
+            } else {
+                // budget-based：旧模型。effort 此时无专用字段，映射为 budget 趋势。
+                let budget = req.thinking_budget.unwrap_or_else(|| {
+                    // 根据 effort 级别映射默认 budget（off 不走这分支）
+                    match req.reasoning_effort.as_deref() {
+                        Some("max")     => 32_000,
+                        Some("xhigh")   => 24_000,
+                        Some("high")    => 16_000,
+                        Some("medium")  => 8_000,
+                        Some("low")     | Some("minimal") => 4_000,
+                        _               => DEFAULT_THINKING_BUDGET,
+                    }
+                });
+                body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+            }
         }
+
         body
     }
 
     fn build_betas(&self, req: &ChatRequest) -> String {
         let mut betas = vec![ANTHROPIC_BETA_TOOLS];
-        if req.extended_thinking {
+        // thinking（adaptive 或 budget）均需 interleaved-thinking beta
+        if req.extended_thinking || req.reasoning_effort.is_some() {
             betas.push(ANTHROPIC_BETA_THINKING);
         }
         betas.join(",")
@@ -550,4 +638,189 @@ fn infer_caps(id: &str) -> ModelInfo {
 /// 离线兜底：拉取失败时至少提供默认模型，保证 catalog 非空（Tips §1.3）。
 fn fallback_model_info() -> ModelInfo {
     infer_caps(DEFAULT_MODEL)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ring_core::tools::{ContentBlock, Message, MessageRole};
+
+    fn provider() -> AnthropicProvider {
+        AnthropicProvider::new("test-key", None)
+    }
+
+    fn user_msg(text: &str) -> Message {
+        Message::new(
+            MessageRole::User,
+            vec![ContentBlock::Text { text: text.into() }],
+        )
+    }
+
+    fn tool_def(name: &str) -> ToolDef {
+        ToolDef {
+            name: name.into(),
+            description: "test tool".into(),
+            input_schema: json!({"type": "object", "properties": {}}),
+        }
+    }
+
+    // ── adaptive thinking 检测 ──────────────────────────────────────────────
+
+    #[test]
+    fn test_is_adaptive_detection() {
+        assert!(is_adaptive_thinking_model("claude-opus-4-6"));
+        assert!(is_adaptive_thinking_model("claude-opus-4-7"));
+        assert!(is_adaptive_thinking_model("claude-sonnet-4-5"));
+        assert!(is_adaptive_thinking_model("claude-fable-5"));
+        assert!(!is_adaptive_thinking_model("claude-opus-4-020"));
+        assert!(!is_adaptive_thinking_model("claude-3-5-sonnet"));
+        assert!(!is_adaptive_thinking_model("claude-sonnet-4-20250514"));
+    }
+
+    // ── adaptive thinking：effort 生效 ──────────────────────────────────────
+
+    #[test]
+    fn test_adaptive_thinking_with_effort() {
+        let p = provider();
+        let req = ChatRequest {
+            model: "claude-opus-4-6".into(),
+            reasoning_effort: Some("high".into()),
+            ..ChatRequest::new("claude-opus-4-6", vec![user_msg("hi")])
+        };
+        let body = p.build_body(&req, false);
+        // adaptive thinking 生效
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert_eq!(body["thinking"]["display"], "summarized");
+        // effort 通过 output_config 传递（关键修复）
+        assert_eq!(body["output_config"]["effort"], "high");
+        // adaptive 模型不用 budget_tokens
+        assert!(body["thinking"].get("budget_tokens").is_none());
+    }
+
+    // ── budget thinking：旧模型 + extended_thinking ─────────────────────────
+
+    #[test]
+    fn test_budget_thinking_old_model() {
+        let p = provider();
+        let req = ChatRequest {
+            extended_thinking: true,
+            thinking_budget: Some(8000),
+            ..ChatRequest::new("claude-sonnet-4-20250514", vec![user_msg("hi")])
+        };
+        let body = p.build_body(&req, false);
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 8000);
+        assert!(body.get("output_config").is_none());
+    }
+
+    // ── effort → budget 映射（旧模型）──────────────────────────────────────
+
+    #[test]
+    fn test_effort_budget_mapping_old_model() {
+        let p = provider();
+        let req = ChatRequest {
+            model: "claude-sonnet-4-20250514".into(),
+            reasoning_effort: Some("high".into()),
+            ..ChatRequest::new("claude-sonnet-4-20250514", vec![user_msg("hi")])
+        };
+        let body = p.build_body(&req, false);
+        // 旧模型：effort high → budget 16000
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 16000);
+    }
+
+    // ── system prompt：数组格式 + cache_control ──────────────────────────────
+
+    #[test]
+    fn test_system_cache_control() {
+        let p = provider();
+        let mut req = ChatRequest::new("claude-opus-4-6", vec![user_msg("hi")]);
+        req.system = Some("You are helpful.".into());
+        let body = p.build_body(&req, false);
+        // system 必须是数组（非字符串）
+        assert!(body["system"].is_array());
+        assert_eq!(body["system"][0]["type"], "text");
+        assert_eq!(body["system"][0]["text"], "You are helpful.");
+        // cache_control 标记存在
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+    }
+
+    // ── 末尾 tool 打 cache_control ───────────────────────────────────────────
+
+    #[test]
+    fn test_tool_cache_control() {
+        let p = provider();
+        let mut req = ChatRequest::new("claude-opus-4-6", vec![user_msg("hi")]);
+        req.tools = vec![tool_def("bash"), tool_def("read")];
+        let body = p.build_body(&req, false);
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 2);
+        // 末尾 tool 有 cache_control
+        assert_eq!(tools[1]["cache_control"]["type"], "ephemeral");
+        // 非末尾 tool 无
+        assert!(tools[0].get("cache_control").is_none());
+    }
+
+    // ── 末尾 user message 打 cache_control ───────────────────────────────────
+
+    #[test]
+    fn test_user_msg_cache_control() {
+        let p = provider();
+        let msgs = vec![
+            user_msg("first"),
+            Message::new(MessageRole::Assistant, vec![ContentBlock::Text { text: "reply".into() }]),
+            user_msg("second"),
+        ];
+        let req = ChatRequest::new("claude-opus-4-6", msgs);
+        let body = p.build_body(&req, false);
+        let msgs = body["messages"].as_array().unwrap();
+        // 最后一条 user（index 2）的 content block 有 cache_control
+        let last_user_content = msgs[2]["content"].as_array().unwrap();
+        assert_eq!(last_user_content[0]["cache_control"]["type"], "ephemeral");
+        // 非最后 user（index 0）无
+        let first_user_content = msgs[0]["content"].as_array().unwrap();
+        assert!(first_user_content[0].get("cache_control").is_none());
+    }
+
+    // ── temperature 与 thinking 互斥 ─────────────────────────────────────────
+
+    #[test]
+    fn test_temperature_mutex_with_thinking() {
+        let p = provider();
+        // thinking 开启时，即使设了 temperature 也不发送
+        let req = ChatRequest {
+            model: "claude-opus-4-6".into(),
+            reasoning_effort: Some("high".into()),
+            temperature: Some(0.7),
+            ..ChatRequest::new("claude-opus-4-6", vec![user_msg("hi")])
+        };
+        let body = p.build_body(&req, false);
+        assert!(body.get("temperature").is_none(), "temperature must be absent when thinking enabled");
+    }
+
+    #[test]
+    fn test_temperature_present_without_thinking() {
+        let p = provider();
+        let req = ChatRequest {
+            temperature: Some(0.7),
+            ..ChatRequest::new("claude-opus-4-6", vec![user_msg("hi")])
+        };
+        let body = p.build_body(&req, false);
+        let temp = body["temperature"].as_f64().unwrap();
+        assert!((temp - 0.7).abs() < 1e-6);
+    }
+
+    // ── build_betas：effort 也触发 thinking beta ─────────────────────────────
+
+    #[test]
+    fn test_betas_with_effort() {
+        let p = provider();
+        let req = ChatRequest {
+            model: "claude-opus-4-6".into(),
+            reasoning_effort: Some("high".into()),
+            ..ChatRequest::new("claude-opus-4-6", vec![user_msg("hi")])
+        };
+        let betas = p.build_betas(&req);
+        assert!(betas.contains(ANTHROPIC_BETA_THINKING));
+    }
 }
