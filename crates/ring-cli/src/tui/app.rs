@@ -1641,18 +1641,6 @@ async fn handle_command(
             }
             CmdResult::Handled
         }
-        CommandOutcome::SwitchThinking { enabled, budget } => {
-            state.think_enabled = enabled;
-            if let Some(b) = budget { state.think_budget = b; }
-            if state.think_enabled {
-                state.chat.add_system(format!(
-                    "thinking ON (budget: {} tokens)", state.think_budget
-                ));
-            } else {
-                state.chat.add_system("thinking OFF");
-            }
-            CmdResult::Handled
-        }
         CommandOutcome::ToggleThinkingDisplay => {
             state.think_show = !state.think_show;
             state.chat.add_system(format!(
