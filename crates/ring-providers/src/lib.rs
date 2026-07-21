@@ -15,3 +15,4 @@ pub use provider::{
     StreamEvent, ToolDef, Usage,
 };
 pub use registry::ProviderRegistry;
+pub mod models_dev;
