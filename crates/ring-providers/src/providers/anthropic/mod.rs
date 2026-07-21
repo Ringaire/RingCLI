@@ -32,7 +32,6 @@ use crate::provider::{
 
 const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
-const ANTHROPIC_BETA_TOOLS: &str = "tools-2024-04-04";
 const ANTHROPIC_BETA_THINKING: &str = "interleaved-thinking-2025-05-14";
 /// Claude Code OAuth 伪装常量（对齐 Pi createClient OAuth 分支）。
 const ANTHROPIC_BETA_CLAUDE_CODE: &str = "claude-code-20250219";
@@ -70,9 +69,12 @@ struct AnthropicContentBlock {
     id:    Option<String>,
     name:  Option<String>,
     input: Option<Value>,
-    /// extended thinking 块内容；反序列化保留，当前不单独渲染
-    #[allow(dead_code)]
+    /// extended thinking 块内容。
     thinking: Option<String>,
+    /// thinking 块签名（多轮连续性必需）。
+    signature: Option<String>,
+    /// redacted_thinking 块的加密 data。
+    data: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,6 +144,16 @@ fn convert_messages(msgs: &[Message]) -> Value {
                     "content": tool_result.to_string(),
                     "is_error": is_error,
                 }),
+                // thinking 块回传（多轮思考链连续性必需）：
+                //   - redacted: 加密块，data 字段存签名/加密内容
+                //   - 普通: thinking + signature
+                ContentBlock::Thinking { thinking, signature, redacted } => {
+                    if *redacted {
+                        json!({ "type": "redacted_thinking", "data": signature })
+                    } else {
+                        json!({ "type": "thinking", "thinking": thinking, "signature": signature })
+                    }
+                }
                 ContentBlock::Image { media_type, data } => json!({
                     "type": "image",
                     "source": {
@@ -258,7 +270,7 @@ impl AnthropicProvider {
     async fn fetch_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
         let url = format!("{}/v1/models?limit=1000", self.base_url);
         let resp = self
-            .apply_headers(self.client.get(&url), ANTHROPIC_BETA_TOOLS)
+            .apply_headers(self.client.get(&url), "")
             .send()
             .await?;
 
@@ -370,7 +382,7 @@ impl AnthropicProvider {
                         _               => DEFAULT_THINKING_BUDGET,
                     }
                 });
-                body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+                body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget, "display": "summarized" });
             }
         }
 
@@ -378,8 +390,8 @@ impl AnthropicProvider {
     }
 
     fn build_betas(&self, req: &ChatRequest) -> String {
-        let mut betas = vec![ANTHROPIC_BETA_TOOLS];
-        // thinking（adaptive 或 budget）均需 interleaved-thinking beta
+        // tools 已 GA，不需 beta（对齐 Pi SDK，不发 tools-2024-04-04）
+        let mut betas: Vec<&str> = Vec::new();
         if req.extended_thinking || req.reasoning_effort.is_some() {
             betas.push(ANTHROPIC_BETA_THINKING);
         }
@@ -390,16 +402,25 @@ impl AnthropicProvider {
     fn apply_headers(&self, builder: reqwest::RequestBuilder, betas: &str) -> reqwest::RequestBuilder {
         let oauth = is_oauth_token(&self.api_key);
         let mut b = builder.header("anthropic-version", ANTHROPIC_API_VERSION);
+        // 合并完整 beta 列表（OAuth 前置 claude-code/oauth）
+        let full_betas = if oauth {
+            let mut parts = vec![ANTHROPIC_BETA_CLAUDE_CODE, ANTHROPIC_BETA_OAUTH];
+            if !betas.is_empty() { parts.push(betas); }
+            parts.join(",")
+        } else {
+            betas.to_string()
+        };
         if oauth {
             b = b
                 .header("authorization", format!("Bearer {}", self.api_key))
-                .header("anthropic-beta", format!("{},{},{}", ANTHROPIC_BETA_CLAUDE_CODE, ANTHROPIC_BETA_OAUTH, betas))
                 .header("user-agent", format!("claude-cli/{}", CLAUDE_CODE_VERSION))
                 .header("x-app", "cli");
         } else {
-            b = b
-                .header("x-api-key", &self.api_key)
-                .header("anthropic-beta", betas);
+            b = b.header("x-api-key", &self.api_key);
+        }
+        // beta 非空才发 header
+        if !full_betas.is_empty() {
+            b = b.header("anthropic-beta", &full_betas);
         }
         b
     }
@@ -451,6 +472,22 @@ impl Provider for AnthropicProvider {
                             tool_input: blk.input.clone().unwrap_or(Value::Object(Default::default())),
                         });
                     }
+                }
+                // thinking 块：保留 thinking + signature（多轮思考链）
+                "thinking" => {
+                    content_blocks.push(ContentBlock::Thinking {
+                        thinking:  blk.thinking.clone().unwrap_or_default(),
+                        signature: blk.signature.clone(),
+                        redacted:  false,
+                    });
+                }
+                // redacted_thinking 块：加密不可读，data 存入 signature 位回传
+                "redacted_thinking" => {
+                    content_blocks.push(ContentBlock::Thinking {
+                        thinking:  "[Reasoning redacted]".into(),
+                        signature: blk.data.clone(),
+                        redacted:  true,
+                    });
                 }
                 _ => {}
             }
@@ -686,16 +723,49 @@ mod tests {
         }
     }
 
-    // ── adaptive thinking 检测 ──────────────────────────────────────────────
+    // ── OAuth token 检测 ──────────────────────────────────────────────────────
 
     #[test]
     fn test_is_oauth_token_detection() {
-        // OAuth token
         assert!(is_oauth_token("sk-ant-oat01-xxxxxxxx"));
-        // 普通 API key
         assert!(!is_oauth_token("sk-ant-api03-xxxxxxxx"));
         assert!(!is_oauth_token("sk-ant-xxxxxxxx"));
         assert!(!is_oauth_token(""));
+    }
+
+    // ── thinking 块回传（多轮思考链）──────────────────────────────────────────
+
+    #[test]
+    fn test_thinking_block_roundtrip() {
+        let msgs = vec![Message::new(
+            MessageRole::Assistant,
+            vec![ContentBlock::Thinking {
+                thinking:  "let me think".into(),
+                signature: Some("sig-abc".into()),
+                redacted:  false,
+            }],
+        )];
+        let val = convert_messages(&msgs);
+        let block = &val[0]["content"][0];
+        assert_eq!(block["type"], "thinking");
+        assert_eq!(block["thinking"], "let me think");
+        assert_eq!(block["signature"], "sig-abc");
+    }
+
+    #[test]
+    fn test_redacted_thinking_block_roundtrip() {
+        let msgs = vec![Message::new(
+            MessageRole::Assistant,
+            vec![ContentBlock::Thinking {
+                thinking:  "[Reasoning redacted]".into(),
+                signature: Some("encrypted-data-xyz".into()),
+                redacted:  true,
+            }],
+        )];
+        let val = convert_messages(&msgs);
+        let block = &val[0]["content"][0];
+        assert_eq!(block["type"], "redacted_thinking");
+        assert_eq!(block["data"], "encrypted-data-xyz");
     }
 
     // ── adaptive thinking 检测 ──────────────────────────────────────────────

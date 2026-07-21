@@ -73,7 +73,7 @@ fn convert_messages_to_input(msgs: &[Message]) -> Value {
                                 "arguments": tool_input.to_string(),
                             }));
                         }
-                        ContentBlock::ToolResult { .. } | ContentBlock::Image { .. } => {}
+                        ContentBlock::ToolResult { .. } | ContentBlock::Image { .. } | ContentBlock::Thinking { .. } => {}
                     }
                 }
                 // assistant message item（如果有文本）
