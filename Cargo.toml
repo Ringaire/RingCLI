@@ -1,16 +1,16 @@
 [workspace]
 resolver = "2"
-default-members = ["crates/neko-cli"]
+default-members = ["crates/ring-cli"]
 members = [
-    "crates/neko-core",
-    "crates/neko-providers",
-    "crates/neko-tools",
-    "crates/neko-mcp",
-    "crates/neko-skills",
-    "crates/neko-engine",
-    "crates/neko-cli",
+    "crates/ring-core",
+    "crates/ring-providers",
+    "crates/ring-tools",
+    "crates/ring-mcp",
+    "crates/ring-skills",
+    "crates/ring-engine",
+    "crates/ring-cli",
     "crates/linkkit-parser",
-    "crates/neko-linkkit",
+    "crates/ring-linkkit",
 ]
 
 [workspace.package]
@@ -80,14 +80,15 @@ url            = "2"
 criterion      = { version = "0.5", features = ["html_reports", "async_tokio"] }
 
 # crate 内部依赖
-neko-core      = { path = "crates/neko-core" }
-neko-engine    = { path = "crates/neko-engine" }
-neko-providers = { path = "crates/neko-providers" }
-neko-tools     = { path = "crates/neko-tools" }
-neko-mcp       = { path = "crates/neko-mcp" }
-neko-skills    = { path = "crates/neko-skills" }
+ring-core      = { path = "crates/ring-core" }
+ring-engine    = { path = "crates/ring-engine" }
+ring-providers = { path = "crates/ring-providers" }
+ring-tools     = { path = "crates/ring-tools" }
+ring-mcp       = { path = "crates/ring-mcp" }
+ring-skills    = { path = "crates/ring-skills" }
 linkkit-parser = { path = "crates/linkkit-parser" }
-neko-linkkit   = { path = "crates/neko-linkkit" }
+ring-linkkit   = { path = "crates/ring-linkkit" }
+ring-cli      = { path = "crates/ring-cli" }
 
 [profile.dev]
 opt-level = 0

@@ -136,20 +136,20 @@ let tags = parser.parse()?;  // Vec<LinkkitTag>
 LinkkitTag → executor.execute() → 闸门检查 → ExecutionResult
 ```
 
-实际工具调用由 `neko-engine` 完成：
+实际工具调用由 `ring-engine` 完成：
 ```rust
 match result {
     ExecutionResult::Bash { command, .. } => {
-        // 调用 neko-tools 的 BashTool
+        // 调用 ring-tools 的 BashTool
     }
     ExecutionResult::Read { file, .. } => {
-        // 调用 neko-tools 的 ReadTool
+        // 调用 ring-tools 的 ReadTool
     }
     // ...
 }
 ```
 
-### 第三阶段：集成到 nekocli
+### 第三阶段：集成到 ringcli
 
 已完成基础集成：
 
@@ -229,7 +229,7 @@ match result {
 
 ```
 ┌─────────────────────────────────┐
-│   neko-engine (会话管理)         │
+│   ring-engine (会话管理)         │
 └────────────┬────────────────────┘
              │
 ┌────────────▼────────────────────┐
@@ -240,7 +240,7 @@ match result {
 └────────────┬────────────────────┘
              │
 ┌────────────▼────────────────────┐
-│   neko-tools (工具实现)          │
+│   ring-tools (工具实现)          │
 │   ├── BashTool                  │
 │   ├── ReadTool                  │
 │   └── EditTool                  │
@@ -290,10 +290,10 @@ pub enum LinkkitError {
 
 ## 后续集成步骤
 
-### 1. 在 neko-engine 中添加 Linkkit 模式
+### 1. 在 ring-engine 中添加 Linkkit 模式
 
 ```rust
-// crates/neko-engine/src/modes/linkkit.rs
+// crates/ring-engine/src/modes/linkkit.rs
 pub struct LinkkitMode {
     executor: LinkkitExecutor,
     tool_registry: Arc<dyn ToolRegistry>,
@@ -316,10 +316,10 @@ impl LinkkitMode {
 
 ### 2. 连接到现有工具
 
-需要在 `neko-tools` 中添加适配层：
+需要在 `ring-tools` 中添加适配层：
 
 ```rust
-// crates/neko-tools/src/adapters/linkkit.rs
+// crates/ring-tools/src/adapters/linkkit.rs
 impl From<ExecutionResult> for ToolContext {
     fn from(result: ExecutionResult) -> Self {
         match result {
@@ -419,7 +419,7 @@ fn expand_path(path: &Path) -> PathBuf {
 2. ✅ 实现了完整的 Linkkit 解析器（23 种标签）
 3. ✅ 实现了两道权限闸门（read-gate + doc-gate）
 4. ✅ 编写了 11 个单元测试（全部通过）
-5. ✅ 集成到 nekocli workspace
+5. ✅ 集成到 ringcli workspace
 6. ✅ 编写了完整的 README 文档
 
 代码质量达到生产级别：
@@ -427,4 +427,4 @@ fn expand_path(path: &Path) -> PathBuf {
 - 完整的错误处理和测试覆盖
 - 清晰的架构和文档
 
-下一步需要在 `neko-engine` 中集成 Linkkit 模式，并将解析结果连接到 `neko-tools` 的具体工具实现。
+下一步需要在 `ring-engine` 中集成 Linkkit 模式，并将解析结果连接到 `ring-tools` 的具体工具实现。

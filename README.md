@@ -1,4 +1,4 @@
-# NekoCLI
+# RingCLI
 
 <div align="center">
 
@@ -8,7 +8,7 @@
 
 (项目处于初始阶段，版本号在正式发布前保持 0.x.x。遵循 [语义化版本 2.0](https://semver.org/lang/zh-CN/))
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/Ringaire/NekoCLI)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/Ringaire/RingCLI)
 [![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-orange.svg)](LICENSE)
 
@@ -24,9 +24,9 @@
 
 ```bash
 # 从源码构建（需要 Rust 1.85+）
-git clone https://github.com/Ringaire/NekoCLI.git
-cd NekoCLI
-cargo install --path crates/neko-cli --bin neko
+git clone https://github.com/Ringaire/RingCLI.git
+cd RingCLI
+cargo install --path crates/ring-cli --bin ring
 
 # 或直接运行
 cargo run --release
@@ -36,11 +36,11 @@ cargo run --release
 
 ```bash
 # 方式一：交互式向导
-neko
+ring
 # 输入 /connect，选择 provider，输入 API key
 
 # 方式二：快速连接
-neko
+ring
 # /connect anthropic sk-ant-xxx
 
 # 方式三：环境变量
@@ -49,7 +49,7 @@ export OPENAI_API_KEY="sk-xxx"
 export DEEPSEEK_API_KEY="sk-xxx"
 ```
 
-配置文件位于 `~/.config/neko/settings.jsonc`（支持注释）。
+配置文件位于 `~/.config/ring/settings.jsonc`（支持注释）。
 
 ---
 

@@ -1,8 +1,8 @@
-# Contributing to NekoCLI
+# Contributing to RingCLI
 
 English | [简体中文](CONTRIBUTING.md)
 
-Thanks for your interest in NekoCLI! This document explains how to get involved.
+Thanks for your interest in RingCLI! This document explains how to get involved.
 
 ---
 
@@ -13,8 +13,8 @@ Thanks for your interest in NekoCLI! This document explains how to get involved.
 - An LLM API key (for testing)
 
 ```bash
-git clone https://github.com/Ringaire/NekoCLI.git
-cd NekoCLI
+git clone https://github.com/Ringaire/RingCLI.git
+cd RingCLI
 cargo build
 ```
 
@@ -72,7 +72,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 feat(tui): add mode picker with scroll selection
 fix(provider): max_tokens sent as context window size
 docs(readme): remove architecture section, simplify
-refactor(engine): move executor from neko-cli to neko-engine
+refactor(engine): move executor from ring-cli to ring-engine
 ```
 
 - **scope** is optional but encouraged for multi-module projects (e.g. `tui`, `provider`, `engine`, `mcp`)
@@ -103,14 +103,14 @@ cargo test
 
 ### Adding a Provider
 
-1. Create `crates/neko-providers/src/providers/added/{name}/mod.rs`
+1. Create `crates/ring-providers/src/providers/added/{name}/mod.rs`
 2. Define `catalog_entry()` function
 3. Declare `pub mod {name};` in `added/mod.rs`
 4. Register in `catalog.rs` `defaults()`
 
 ### Adding a Tool
 
-1. Create `crates/neko-tools/src/tools/{name}.rs`
+1. Create `crates/ring-tools/src/tools/{name}.rs`
 2. Implement the `Tool` trait
 3. Register in `register.rs`
 
@@ -138,13 +138,13 @@ feat(tui): add effort command for reasoning control
 
 ```
 crates/
-├── neko-core/       Types, events, permissions, sessions, config
-├── neko-providers/  LLM adapters (Anthropic/OpenAI/Gemini/Compatible + OAuth2)
-├── neko-tools/      17 built-in tools
-├── neko-mcp/        MCP protocol client
-├── neko-skills/     Skill loader (SKILL.md)
-├── neko-engine/     Agent execution loop, orchestration
-└── neko-cli/        TUI, REPL, command system
+├── ring-core/       Types, events, permissions, sessions, config
+├── ring-providers/  LLM adapters (Anthropic/OpenAI/Gemini/Compatible + OAuth2)
+├── ring-tools/      17 built-in tools
+├── ring-mcp/        MCP protocol client
+├── ring-skills/     Skill loader (SKILL.md)
+├── ring-engine/     Agent execution loop, orchestration
+└── ring-cli/        TUI, REPL, command system
 ```
 
 ---

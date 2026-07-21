@@ -2,7 +2,7 @@
 
 [English](CONTRIBUTING_EN.md) | 简体中文
 
-感谢你对 NekoCLI 的兴趣！本文档说明如何参与开发。
+感谢你对 RingCLI 的兴趣！本文档说明如何参与开发。
 
 ---
 
@@ -13,8 +13,8 @@
 - 一个 LLM API key（用于功能测试）
 
 ```bash
-git clone https://github.com/Ringaire/NekoCLI.git
-cd NekoCLI
+git clone https://github.com/Ringaire/RingCLI.git
+cd RingCLI
 cargo build
 ```
 
@@ -72,7 +72,7 @@ git checkout -b feat/your-feature
 feat(tui): add mode picker with scroll selection
 fix(provider): max_tokens sent as context window size
 docs(readme): remove architecture section, simplify
-refactor(engine): move executor from neko-cli to neko-engine
+refactor(engine): move executor from ring-cli to ring-engine
 ```
 
 - **scope** 可选，建议多模块项目使用（如 `tui`、`provider`、`engine`、`mcp`）
@@ -103,14 +103,14 @@ cargo test
 
 ### 新增 Provider
 
-1. 在 `crates/neko-providers/src/providers/added/{name}/` 下创建 `mod.rs`
+1. 在 `crates/ring-providers/src/providers/added/{name}/` 下创建 `mod.rs`
 2. 定义 `catalog_entry()` 函数
 3. 在 `added/mod.rs` 声明 `pub mod {name};`
 4. 在 `catalog.rs` 的 `defaults()` 注册
 
 ### 新增工具
 
-1. 在 `crates/neko-tools/src/tools/` 下创建 `{name}.rs`
+1. 在 `crates/ring-tools/src/tools/` 下创建 `{name}.rs`
 2. 实现 `Tool` trait
 3. 在 `register.rs` 注册
 
@@ -138,13 +138,13 @@ feat(tui): add effort command for reasoning control
 
 ```
 crates/
-├── neko-core/       类型、事件、权限、会话、配置
-├── neko-providers/  LLM 适配（Anthropic/OpenAI/Gemini/Compatible + OAuth2）
-├── neko-tools/      17 个内置工具
-├── neko-mcp/        MCP 协议客户端
-├── neko-skills/     Skill 加载（SKILL.md）
-├── neko-engine/     Agent 执行循环、编排
-└── neko-cli/        TUI、REPL、命令系统
+├── ring-core/       类型、事件、权限、会话、配置
+├── ring-providers/  LLM 适配（Anthropic/OpenAI/Gemini/Compatible + OAuth2）
+├── ring-tools/      17 个内置工具
+├── ring-mcp/        MCP 协议客户端
+├── ring-skills/     Skill 加载（SKILL.md）
+├── ring-engine/     Agent 执行循环、编排
+└── ring-cli/        TUI、REPL、命令系统
 ```
 
 ---
