@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use ring_core::session;
 use ring_core::tools::Message;
-use ring_providers::provider::DEFAULT_THINKING_BUDGET;
+
 
 use ring_engine::{AgentContext, AgentExecutor, TurnResult};
 use crate::args::Args;
@@ -98,14 +98,6 @@ pub async fn run_plain(mut runtime: BootstrappedRuntime, args: &Args) -> Result<
             }
             CommandOutcome::QuickConnect { provider, api_key, base_url } => {
                 quick_connect(&mut runtime, &mut ctx, provider, api_key, base_url).await;
-            }
-            CommandOutcome::SwitchThinking { enabled, budget } => {
-                if enabled {
-                    let budget = budget.unwrap_or(DEFAULT_THINKING_BUDGET);
-                    println!("[thinking ON (budget: {} tokens)]", budget);
-                } else {
-                    println!("[thinking OFF]");
-                }
             }
             CommandOutcome::ToggleThinkingDisplay => {
                 println!("[reasoning display toggled — TUI only]");

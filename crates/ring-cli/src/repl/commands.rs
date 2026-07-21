@@ -33,7 +33,6 @@ pub const COMMANDS: &[CommandMeta] = &[
     CommandMeta { name: "mode",     description: "Switch permission mode",                arg_hint: Some("ask|edit|plan|build|agent") },
     CommandMeta { name: "model",    description: "Show or switch model",                  arg_hint: Some("[provider/model-id]") },
     CommandMeta { name: "connect",       description: "Configure provider (wizard)",          arg_hint: None },
-    CommandMeta { name: "think",    description: "Control extended thinking (on/off/budget)", arg_hint: Some("on|off [budget]") },
     CommandMeta { name: "thinking", description: "Toggle reasoning process display (fold/expand)", arg_hint: None },
     CommandMeta { name: "effort",   description: "Set or cycle reasoning effort level",     arg_hint: Some("[off|minimal|low|medium|high|xhigh|max]") },
     CommandMeta { name: "logout",        description: "Remove stored provider credentials",    arg_hint: None },
@@ -91,8 +90,6 @@ pub enum CommandOutcome {
     OpenProviderSetup,
     /// `/connect <provider> <key> [url]` 快速配置。
     QuickConnect { provider: String, api_key: Option<String>, base_url: Option<String> },
-    /// 控制 extended thinking（on/off + budget）。
-    SwitchThinking { enabled: bool, budget: Option<u32> },
     /// 切换 reasoning 显示（折叠/展开）。
     ToggleThinkingDisplay,
     /// 设置 reasoning effort 级别（off/minimal/low/medium/high/xhigh/max）。
@@ -186,31 +183,6 @@ pub fn handle(text: &str, skills: &SkillRegistry) -> CommandOutcome {
             }
         }
         "connect" => CommandOutcome::OpenProviderSetup,
-        "think" => {
-            let mut parts = rest.split_whitespace();
-            let sub = parts.next().unwrap_or("").to_lowercase();
-            match sub.as_str() {
-                "on" => {
-                    let budget: Option<u32> = parts.next().and_then(|s| s.parse().ok());
-                    CommandOutcome::SwitchThinking { enabled: true, budget }
-                }
-                "off" => {
-                    CommandOutcome::SwitchThinking { enabled: false, budget: None }
-                }
-                "" => {
-                    println!("usage: /think on|off [budget]");
-                    CommandOutcome::Handled
-                }
-                _ => {
-                    if let Ok(n) = sub.parse::<u32>() {
-                        CommandOutcome::SwitchThinking { enabled: true, budget: Some(n) }
-                    } else {
-                        println!("usage: /think on|off [budget]");
-                        CommandOutcome::Handled
-                    }
-                }
-            }
-        }
         "thinking" => CommandOutcome::ToggleThinkingDisplay,
         "effort" => {
             let level = rest.trim().to_lowercase();
