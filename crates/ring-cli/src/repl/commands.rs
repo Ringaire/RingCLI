@@ -37,7 +37,10 @@ pub const COMMANDS: &[CommandMeta] = &[
     CommandMeta { name: "thinking", description: "Toggle reasoning process display (fold/expand)", arg_hint: None },
     CommandMeta { name: "effort",   description: "Set or cycle reasoning effort level",     arg_hint: Some("[off|minimal|low|medium|high|xhigh|max]") },
     CommandMeta { name: "logout",        description: "Remove stored provider credentials",    arg_hint: None },
-    CommandMeta { name: "refreshmodel",  description: "Refresh model list for a provider",    arg_hint: None },
+    CommandMeta { name: "refresh",       description: "Refresh everything (config + tools + skills)", arg_hint: None },
+    CommandMeta { name: "refresh:config",  description: "Refresh provider config + registry",         arg_hint: None },
+    CommandMeta { name: "refresh:model",   description: "Refresh model list cache for a provider",    arg_hint: None },
+    CommandMeta { name: "refresh:tool",    description: "Refresh MCP tool list",                     arg_hint: None },
     CommandMeta { name: "resume",   description: "Resume / manage saved sessions",        arg_hint: Some("[sessions|ls|<session-uuid>]") },
     CommandMeta { name: "compact",  description: "Summarize & compact the conversation",  arg_hint: None },
     CommandMeta { name: "clear",    description: "Clear the screen / chat",               arg_hint: None },
@@ -46,7 +49,6 @@ pub const COMMANDS: &[CommandMeta] = &[
     CommandMeta { name: "plan",     description: "Enter plan mode for architecture planning", arg_hint: Some("[description]") },
     CommandMeta { name: "init",     description: "Generate AGENTS.md for this project",  arg_hint: None },
     CommandMeta { name: "loop",     description: "Autonomous loop — agent works toward a goal", arg_hint: Some("<goal> [max_turns] | stop | status") },
-    CommandMeta { name: "reload",   description: "Reload config + providers + skills",       arg_hint: None },
     CommandMeta { name: "quit",     description: "Exit ring",                             arg_hint: None },
 ];
 
@@ -100,6 +102,12 @@ pub enum CommandOutcome {
     Logout,
     /// 刷新模型列表（无参数，打开 provider 选择器）。
     RefreshModel,
+    /// 刷新 MCP tool 列表。
+    RefreshTool,
+    /// 刷新提供商配置 + registry。
+    RefreshConfig,
+    /// 刷新全部（config + provider + tools + skills）。
+    RefreshAll,
     /// 清屏 / 清空对话。
     Clear,
     /// 压缩上下文。
@@ -122,8 +130,6 @@ pub enum CommandOutcome {
     LoopStop,
     /// 查看循环状态。
     LoopStatus,
-    /// 热重载配置 + provider + skill。
-    Reload,
     /// 已就地处理（或需主循环按命令名做 async 收尾，如 /sessions、/memory）。
     Handled,
 }
@@ -274,8 +280,10 @@ pub fn handle(text: &str, skills: &SkillRegistry) -> CommandOutcome {
         }
         "quit" => CommandOutcome::Quit,
         "logout" => CommandOutcome::Logout,
-        "refreshmodel" | "refresh-model" | "refresh" => CommandOutcome::RefreshModel,
-        "reload" => CommandOutcome::Reload,
+        "refreshmodel" | "refresh:model" => CommandOutcome::RefreshModel,
+        "refreshtool" | "refresh:tool" => CommandOutcome::RefreshTool,
+        "refreshconfig" | "refresh:config" => CommandOutcome::RefreshConfig,
+        "refresh" | "refresh:all" | "reload" => CommandOutcome::RefreshAll,
         // 其余：尝试作为技能名。
         other => {
             if let Some(skill) = skills.get(other) {
