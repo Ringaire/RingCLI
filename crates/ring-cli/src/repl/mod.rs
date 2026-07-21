@@ -135,6 +135,12 @@ pub async fn run_plain(mut runtime: BootstrappedRuntime, args: &Args) -> Result<
             CommandOutcome::RefreshModel => {
                 println!("[model refresh: use TUI /refresh:model to pick provider]");
             }
+            CommandOutcome::Settings => {
+                println!("[current settings]");
+                println!("  mode:   {}", runtime.mode);
+                println!("  model:  {}", runtime.model);
+                println!("  (use TUI /setting for interactive panel; /effort /think for thinking)");
+            }
             CommandOutcome::RefreshTool => {
                 println!("[⟳ refreshing MCP tools…]");
                 runtime.ring_runtime.apply_mcp_config(&runtime.config.mcp_servers).await;
