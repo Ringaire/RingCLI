@@ -18,6 +18,24 @@ pub struct ProviderEntry {
     pub base_url: Option<String>,
 }
 
+// ── 手动模型能力定义（覆盖 models.dev）─────────────────────────────────────────
+
+/// 用户在 settings.jsonc 里手动定义的模型能力。
+/// 所有字段可选：None = 不覆盖，由 models.dev 或默认填充。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelCaps {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision:   Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools:    Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context:  Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output:   Option<u64>,
+}
+
 // ── MCP 服务器配置 ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +107,9 @@ pub struct NekoUserConfig {
     pub providers:   Option<HashMap<String, ProviderEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models:      Option<HashMap<String, Vec<String>>>,
+    /// 手动模型能力定义（覆盖 models.dev）。key = 裸 model id。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_caps:  Option<HashMap<String, ModelCaps>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy:       Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,6 +127,7 @@ pub struct ResolvedConfig {
     pub model:       Option<String>,
     pub providers:   HashMap<String, ProviderEntry>,
     pub models:      HashMap<String, Vec<String>>,
+    pub model_caps:  HashMap<String, ModelCaps>,
     pub proxy:       Option<String>,
     pub mcp_servers: HashMap<String, McpServerConfig>,
     pub session:     SessionConfig,
@@ -119,6 +141,7 @@ impl Default for ResolvedConfig {
             model:       None,
             providers:   HashMap::new(),
             models:      HashMap::new(),
+            model_caps:  HashMap::new(),
             proxy:       None,
             mcp_servers: HashMap::new(),
             session:     SessionConfig::default(),
@@ -182,6 +205,10 @@ fn merge_config(base: &mut NekoUserConfig, over: NekoUserConfig) {
     if let Some(ms) = over.models {
         let target = base.models.get_or_insert_with(HashMap::new);
         for (k, v) in ms { target.insert(k, v); }
+    }
+    if let Some(mc) = over.model_caps {
+        let target = base.model_caps.get_or_insert_with(HashMap::new);
+        for (k, v) in mc { target.insert(k, v); }
     }
     if let Some(mcp) = over.mcp_servers {
         let target = base.mcp_servers.get_or_insert_with(HashMap::new);
@@ -434,6 +461,7 @@ pub async fn load_config(cwd: Option<&std::path::Path>) -> ResolvedConfig {
         model:       merged.model.filter(|m| !m.trim().is_empty()),
         providers,
         models:      merged.models.unwrap_or_default(),
+        model_caps:  merged.model_caps.unwrap_or_default(),
         proxy,
         mcp_servers: merged.mcp_servers.unwrap_or_default(),
         session:     merged.session.unwrap_or_default(),
