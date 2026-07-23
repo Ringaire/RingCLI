@@ -1932,13 +1932,15 @@ async fn start_turn(
 
     // 聊天区显示用户原文（保留 `@path` token）；发给模型的消息追加被引用文件的内容。
     state.chat.add_user(text.clone());
-    let attachments = crate::repl::file_complete::expand_mentions(&text, std::path::Path::new(&state.cwd));
-    let model_text = if attachments.is_empty() { text } else { format!("{text}{attachments}") };
+    let mentions = crate::repl::file_complete::expand_mentions(&text, std::path::Path::new(&state.cwd));
+    let model_text = if mentions.is_empty() { text.clone() } else { format!("{text}{}", mentions.text) };
 
-    // 添加用户消息并持久化
+    // 添加用户消息并持久化（含图片 blocks）
     let session_id = runtime.session.meta.id;
     {
-        let msg = Message::user_text(model_text);
+        let mut content = vec![ring_core::tools::ContentBlock::Text { text: model_text }];
+        content.extend(mentions.images);
+        let msg = ring_core::tools::Message::new(ring_core::tools::MessageRole::User, content);
         let mut guard = ctx.lock().await;
         guard.add_message(msg.clone());
         drop(guard);

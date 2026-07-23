@@ -22,6 +22,8 @@ tokio-util   = { workspace = true }
 async-trait  = { workspace = true }
 rusqlite     = { workspace = true }
 zstd         = { workspace = true }
+image        = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+base64       = "0.22"
 
 [dev-dependencies]
 criterion    = { workspace = true }

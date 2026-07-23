@@ -5,6 +5,7 @@ pub mod permissions;
 pub mod session;
 pub mod skills;
 pub mod tools;
+pub mod image;
 pub mod runtime;
 
 pub use agent::{
