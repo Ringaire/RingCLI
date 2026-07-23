@@ -13,7 +13,7 @@ use ring_core::tools::{ContentBlock, Message, MessageRole};
 use reqwest::Client;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::error::ProviderError;
 use crate::provider::{
@@ -286,7 +286,55 @@ impl Provider for OpenAiResponsesProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
-        Ok(openai_known_models())
+        // 查询端点 GET {base_url}/models（兼容 OpenAI 列表格式 {data:[{id:...}]}），
+        // 失败则回退到内置已知模型，保证离线/不支持 /models 的端点仍可用。
+        let url = format!("{}/models", self.base_url);
+        let resp = match self.add_headers(self.client.get(&url)).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("openai-responses list_models: GET {url} failed ({e}); using known models");
+                return Ok(openai_known_models());
+            }
+        };
+        let resp = match check_response_error(resp).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("openai-responses list_models: response error ({e}); using known models");
+                return Ok(openai_known_models());
+            }
+        };
+        let raw: Value = match resp.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("openai-responses list_models: body parse failed ({e}); using known models");
+                return Ok(openai_known_models());
+            }
+        };
+        let ids: Vec<String> = raw
+            .get("data")
+            .and_then(|d| d.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if ids.is_empty() {
+            return Ok(openai_known_models());
+        }
+        // 能力细节（context/output）由 models.dev 或用户 model_caps 覆盖；此处仅给保守默认。
+        Ok(ids
+            .into_iter()
+            .map(|id| ModelInfo {
+                display_name: id.clone(),
+                id,
+                context_window: 0,
+                max_output_tokens: 0,
+                supports_vision: true,
+                supports_thinking: false,
+                supports_tools: true,
+            })
+            .collect())
     }
 }
 

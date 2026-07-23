@@ -72,7 +72,7 @@ impl RcaClient {
     }
 
     /// Check if this client has a stored auth token.
-    /// Send a TaskResult back to NekoRCA.
+    /// Send a TaskResult back to RingRCA.
     pub fn send_result(&self, result: TaskResult) {
         let payload = serde_json::to_value(result).unwrap_or_else(|e| {
             tracing::error!("failed to serialize TaskResult: {}", e);

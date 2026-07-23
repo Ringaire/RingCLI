@@ -172,13 +172,13 @@ impl Renderer {
             Event::End(TagEnd::BlockQuote(_)) => {
                 self.flush();
                 if self.prefix.ends_with("│ ") {
-                    self.prefix.truncate(self.prefix.len() - 2);
+                    self.prefix.truncate(self.prefix.len() - "│ ".len());
                 }
             }
             Event::End(TagEnd::Item) => {
                 self.flush();
                 if self.prefix.ends_with("• ") {
-                    self.prefix.truncate(self.prefix.len() - 2);
+                    self.prefix.truncate(self.prefix.len() - "• ".len());
                 }
             }
             Event::End(_) => {}
