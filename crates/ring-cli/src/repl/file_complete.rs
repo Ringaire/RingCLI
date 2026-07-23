@@ -172,11 +172,29 @@ const MAX_FILE_BYTES: usize = 128 * 1024;
 /// - 安全：只读 cwd 范围内的文件（canonicalize + starts_with）；越界 / 非 UTF-8 / 不存在 → 跳过。
 /// - 大文件按 `MAX_FILE_BYTES` 截断并标注。无可解析引用时返回空串。
 /// - （CC 的 readFileState 去重 / 压缩后引用 v1 先不做。）
-pub fn expand_mentions(text: &str, cwd: &Path) -> String {
+/// @path 引用展开结果：文本附件 + 图片 blocks。
+pub struct Mentions {
+    /// 文本附件拼接（不含原文），原样附加到用户文本后。
+    pub text:   String,
+    /// 图片附件（已压缩 + base64），作为 ContentBlock::Image 加入 message。
+    pub images: Vec<ring_core::tools::ContentBlock>,
+}
+
+impl Mentions {
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty() && self.images.is_empty()
+    }
+}
+
+pub fn expand_mentions(text: &str, cwd: &Path) -> Mentions {
     use std::collections::HashSet;
+    use ring_core::image;
+    use ring_core::tools::ContentBlock;
+
     let cwd_canon = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
     let mut seen: HashSet<&str> = HashSet::new();
-    let mut out = String::new();
+    let mut text_out = String::new();
+    let mut images: Vec<ContentBlock> = Vec::new();
 
     for tok in text.split_whitespace() {
         if tok.len() < 2 || !tok.starts_with('@') {
@@ -190,19 +208,29 @@ pub fn expand_mentions(text: &str, cwd: &Path) -> String {
         if !canon.starts_with(&cwd_canon) || !canon.is_file() {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(&canon) else { continue }; // 非 UTF-8 跳过
+        // 图片 → 自动压缩 + ContentBlock::Image
+        if image::is_image(&canon) {
+            if let Some((media_type, data)) = image::read_and_compress(&canon, image::DEFAULT_MAX_BYTES) {
+                images.push(ContentBlock::Image { media_type, data });
+            } else {
+                text_out.push_str(&format!("\n\n[attached image: {rel} — failed to read/compress]"));
+            }
+            continue;
+        }
+        // 文本文件
+        let Ok(content) = std::fs::read_to_string(&canon) else { continue };
         if content.len() > MAX_FILE_BYTES {
             let mut cut = MAX_FILE_BYTES;
             while !content.is_char_boundary(cut) { cut -= 1; }
-            out.push_str(&format!(
+            text_out.push_str(&format!(
                 "\n\n[attached file: {rel} — truncated to first 128KB]\n```\n{}\n```",
                 &content[..cut]
             ));
         } else {
-            out.push_str(&format!("\n\n[attached file: {rel}]\n```\n{content}\n```"));
+            text_out.push_str(&format!("\n\n[attached file: {rel}]\n```\n{content}\n```"));
         }
     }
-    out
+    Mentions { text: text_out, images }
 }
 
 // ── 粘贴处理：file:// URL → @path 引用 ─────────────────────────────────────
@@ -391,8 +419,9 @@ mod tests {
 
         // 真实文件 → 注入文件内容（对照 CC）
         let out = expand_mentions("看 @hello.txt 这个", &dir);
-        assert!(out.contains("HELLO_CONTENT"), "应注入文件内容: {out}");
-        assert!(out.contains("hello.txt"));
+        assert!(out.text.contains("HELLO_CONTENT"), "应注入文件内容: {}", out.text);
+        assert!(out.text.contains("hello.txt"));
+        assert!(out.images.is_empty());
 
         // 不存在的引用 → 忽略
         assert!(expand_mentions("@nope.txt", &dir).is_empty());

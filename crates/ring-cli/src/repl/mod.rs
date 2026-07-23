@@ -259,11 +259,13 @@ async fn process_user_input(
     text:    String,
     reader:  &mut StdinReader,
 ) -> Result<()> {
-    // 展开 `@path` 引用：把 cwd 内被引用文件的内容追加到发给模型的消息。
+    // 展开 `@path` 引用：文本附件追加到消息，图片转为 ContentBlock::Image。
     let cwd = runtime.cwd.clone();
-    let attachments = crate::repl::file_complete::expand_mentions(&text, &cwd);
-    let model_text = if attachments.is_empty() { text } else { format!("{text}{attachments}") };
-    let user_msg = Message::user_text(model_text);
+    let mentions = crate::repl::file_complete::expand_mentions(&text, &cwd);
+    let model_text = if mentions.is_empty() { text } else { format!("{text}{}", mentions.text) };
+    let mut content = vec![ring_core::tools::ContentBlock::Text { text: model_text }];
+    content.extend(mentions.images);
+    let user_msg = ring_core::tools::Message::new(ring_core::tools::MessageRole::User, content);
     ctx.add_message(user_msg.clone());
     session::append_message(runtime.session.meta.id, user_msg).await.ok();
 
