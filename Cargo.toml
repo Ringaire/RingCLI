@@ -76,6 +76,10 @@ pulldown-cmark = "0.13"
 sha2           = "0.10"
 url            = "2"
 
+# 数据库 + 压缩
+rusqlite       = { version = "0.32", features = ["bundled"] }
+zstd           = "0.13"
+
 # 性能基准测试
 criterion      = { version = "0.5", features = ["html_reports", "async_tokio"] }
 
