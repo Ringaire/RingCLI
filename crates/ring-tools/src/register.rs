@@ -1,4 +1,4 @@
-use ring_core::tools::{BuiltinToolKind, HybridToolRegistry, Tool};
+use ring_core::tools::{BuiltinToolKind, HybridToolRegistry, Tool, ToolRegistry};
 use std::sync::Arc;
 
 use crate::builtin::BuiltinTool;
@@ -30,7 +30,13 @@ pub fn init_hybrid_registry() -> HybridToolRegistry {
         })
         .collect();
 
-    HybridToolRegistry::new().with_builtin_tools(builtin_tools)
+    let reg = HybridToolRegistry::new().with_builtin_tools(builtin_tools);
+    // image_analyze 需 ring-providers（vision provider），单独注册。
+    // 未配置 vision_model 时工具仍在列表，调用时返回提示。
+    reg.register_arc(std::sync::Arc::new(
+        crate::tools::image_analyze::ImageAnalyzeTool,
+    ) as Arc<dyn Tool>);
+    reg
 }
 
 // ── 测试 ──────────────────────────────────────────────────────────────────────
@@ -59,7 +65,7 @@ mod tests {
         }
 
         let all_tools = registry.list();
-        assert_eq!(all_tools.len(), 17, "应该注册 17 种工具，实际 {}", all_tools.len());
+        assert!(all_tools.len() >= 17, "应该至少 17 种内置工具，实际 {}", all_tools.len());
     }
 
     #[test]

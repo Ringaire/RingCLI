@@ -85,8 +85,8 @@ criterion      = { version = "0.5", features = ["html_reports", "async_tokio"] }
 
 # crate 内部依赖
 ring-core      = { path = "crates/ring-core" }
-ring-engine    = { path = "crates/ring-engine" }
 ring-providers = { path = "crates/ring-providers" }
+ring-engine    = { path = "crates/ring-engine" }
 ring-tools     = { path = "crates/ring-tools" }
 ring-mcp       = { path = "crates/ring-mcp" }
 ring-skills    = { path = "crates/ring-skills" }

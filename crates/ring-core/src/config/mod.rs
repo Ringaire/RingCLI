@@ -110,6 +110,8 @@ pub struct NekoUserConfig {
     /// 手动模型能力定义（覆盖 models.dev）。key = 裸 model id。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_caps:  Option<HashMap<String, ModelCaps>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy:       Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -128,6 +130,9 @@ pub struct ResolvedConfig {
     pub providers:   HashMap<String, ProviderEntry>,
     pub models:      HashMap<String, Vec<String>>,
     pub model_caps:  HashMap<String, ModelCaps>,
+    /// 视觉辅助模型（provider/model 格式），供 image_analyze 工具调用。
+    /// 主模型不支持 image 时，图片转发给此模型识别。
+    pub vision_model: Option<String>,
     pub proxy:       Option<String>,
     pub mcp_servers: HashMap<String, McpServerConfig>,
     pub session:     SessionConfig,
@@ -142,6 +147,7 @@ impl Default for ResolvedConfig {
             providers:   HashMap::new(),
             models:      HashMap::new(),
             model_caps:  HashMap::new(),
+            vision_model: None,
             proxy:       None,
             mcp_servers: HashMap::new(),
             session:     SessionConfig::default(),
@@ -216,6 +222,7 @@ fn merge_config(base: &mut NekoUserConfig, over: NekoUserConfig) {
     }
     if let Some(s) = over.session { base.session = Some(s); }
     if let Some(u) = over.ui      { base.ui      = Some(u); }
+    if let Some(vm) = over.vision_model { base.vision_model = Some(vm); }
 }
 
 // ── Claude Code 兼容：.mcp.json 读取 ──────────────────────────────────────────
@@ -462,6 +469,7 @@ pub async fn load_config(cwd: Option<&std::path::Path>) -> ResolvedConfig {
         providers,
         models:      merged.models.unwrap_or_default(),
         model_caps:  merged.model_caps.unwrap_or_default(),
+        vision_model: merged.vision_model,
         proxy,
         mcp_servers: merged.mcp_servers.unwrap_or_default(),
         session:     merged.session.unwrap_or_default(),

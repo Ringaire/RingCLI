@@ -2,6 +2,7 @@ pub mod bash;
 pub mod edit_file;
 pub mod glob;
 pub mod grep;
+pub mod image_analyze;
 pub mod lsp_diagnostics;
 pub mod lsp_refs;
 pub mod memory;
