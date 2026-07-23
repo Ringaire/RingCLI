@@ -17,7 +17,7 @@ pub enum BashStream {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum NekoEvent {
+pub enum RingEvent {
     // ── Agent / LLM 事件 ──
     AgentThinking {
         session_id: Uuid,
@@ -148,7 +148,7 @@ pub enum NekoEvent {
     },
 }
 
-impl NekoEvent {
+impl RingEvent {
     /// 该事件所属会话。
     pub fn session_id(&self) -> Uuid {
         match self {
@@ -209,7 +209,7 @@ const BUS_CAPACITY: usize = 1024;
 
 #[derive(Clone)]
 pub struct EventBus {
-    tx: broadcast::Sender<NekoEvent>,
+    tx: broadcast::Sender<RingEvent>,
 }
 
 impl EventBus {
@@ -218,11 +218,11 @@ impl EventBus {
         Self { tx }
     }
 
-    pub fn emit(&self, event: NekoEvent) {
+    pub fn emit(&self, event: RingEvent) {
         let _ = self.tx.send(event);
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<NekoEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<RingEvent> {
         self.tx.subscribe()
     }
 }

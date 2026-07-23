@@ -17,7 +17,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 use ring_core::agent::{select_model_by_role, ModelCatalogEntry, ModelRole};
-use ring_core::events::{EventBus, NekoEvent};
+use ring_core::events::{EventBus, RingEvent};
 use ring_core::permissions::DefaultPermissionEngine;
 use ring_core::tools::{
     AugmentedToolRegistry, ContentBlock, Message, MessageRole, SubToolRegistry, Tool, ToolContext,
@@ -165,7 +165,7 @@ impl Tool for SpawnAgentTool {
         debug!(%sub_agent_id, %model, depth = self.depth, "spawning sub-agent");
 
         // 通告派生
-        self.bus.emit(NekoEvent::AgentSpawned {
+        self.bus.emit(RingEvent::AgentSpawned {
             session_id:   ctx.session_id,
             sub_agent_id,
             role:         role.clone(),
@@ -216,7 +216,7 @@ impl Tool for SpawnAgentTool {
                     format!("[model={} · {} tool calls · {:.1}s]\n\n{}", model_bg, tool_count, elapsed, output)
                 };
                 bg_results.lock().await.insert(task_id, output);
-                bus.emit(NekoEvent::AgentDone { session_id, sub_agent_id: Some(task_id), stop_reason: "bg_complete".into() });
+                bus.emit(RingEvent::AgentDone { session_id, sub_agent_id: Some(task_id), stop_reason: "bg_complete".into() });
                 debug!(%task_id, "bg sub-agent completed");
             });
 

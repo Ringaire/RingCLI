@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-use ring_core::{load_config, load_user_config, save_config, NekoUserConfig, ProviderEntry};
+use ring_core::{load_config, load_user_config, save_config, RingUserConfig, ProviderEntry};
 
 use crate::bootstrap::BootstrappedRuntime;
 
@@ -123,7 +123,7 @@ pub async fn cache_models(provider_id: &str, ids: &[String]) {
 pub async fn apply_config_reload(
     runtime:     &mut BootstrappedRuntime,
     cwd:         &Path,
-    cfg:         &NekoUserConfig,
+    cfg:         &RingUserConfig,
     provider_id: &str,
     model:       &str,
 ) -> Result<(), String> {
@@ -215,7 +215,7 @@ pub fn list_stored_credentials() -> Vec<(String, String)> {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
-    let cfg: ring_core::NekoUserConfig =
+    let cfg: ring_core::RingUserConfig =
         ring_core::config::parse_jsonc(&raw).unwrap_or_default();
     let Some(providers) = cfg.providers else {
         return Vec::new();

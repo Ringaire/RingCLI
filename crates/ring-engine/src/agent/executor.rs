@@ -4,7 +4,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use uuid::Uuid;
 
-use ring_core::events::{EventBus, NekoEvent};
+use ring_core::events::{EventBus, RingEvent};
 use ring_core::permissions::{AccessCheck, DefaultPermissionEngine, PermissionAction};
 use ring_core::session;
 use ring_core::tools::{ContentBlock, Message, MessageRole, ToolContext, ToolRegistry};
@@ -149,7 +149,7 @@ impl AgentExecutor {
     }
 
     async fn do_turn(&self, ctx: &mut AgentContext, signal: CancellationToken) -> TurnResult {
-        self.bus.emit(NekoEvent::AgentThinking {
+        self.bus.emit(RingEvent::AgentThinking {
             session_id:   self.session_id,
             sub_agent_id: self.sub_agent_id,
         });
@@ -179,7 +179,7 @@ impl AgentExecutor {
         let mut stream = match self.provider.stream(&req, signal.clone()).await {
             Ok(s) => s,
             Err(e) => {
-                self.bus.emit(NekoEvent::AgentError {
+                self.bus.emit(RingEvent::AgentError {
                     session_id:   self.session_id,
                     sub_agent_id: self.sub_agent_id,
                     error:        e.to_string(),
@@ -208,28 +208,28 @@ impl AgentExecutor {
             match ev {
                 StreamEvent::Chunk(chunk) => match chunk {
                     StreamChunk::ThinkingDelta { delta } => {
-                        self.bus.emit(NekoEvent::AgentReasoning {
+                        self.bus.emit(RingEvent::AgentReasoning {
                             session_id: self.session_id, sub_agent_id: self.sub_agent_id, delta,
                         });
                     }
                     StreamChunk::ThinkingDone { full } => {
-                        self.bus.emit(NekoEvent::AgentReasoningDone {
+                        self.bus.emit(RingEvent::AgentReasoningDone {
                             session_id: self.session_id, sub_agent_id: self.sub_agent_id, full,
                         });
                     }
                     StreamChunk::TextDelta { delta } => {
                         text_acc.push_str(&delta);
-                        self.bus.emit(NekoEvent::AgentText {
+                        self.bus.emit(RingEvent::AgentText {
                             session_id: self.session_id, sub_agent_id: self.sub_agent_id, delta,
                         });
                     }
                     StreamChunk::TextDone { full } => {
-                        self.bus.emit(NekoEvent::AgentTextDone {
+                        self.bus.emit(RingEvent::AgentTextDone {
                             session_id: self.session_id, sub_agent_id: self.sub_agent_id, full,
                         });
                     }
                     StreamChunk::ToolCallStart { call_id, tool_name } => {
-                        self.bus.emit(NekoEvent::AgentToolCall {
+                        self.bus.emit(RingEvent::AgentToolCall {
                             session_id:   self.session_id,
                             sub_agent_id: self.sub_agent_id,
                             call_id:      call_id.clone(),
@@ -249,14 +249,14 @@ impl AgentExecutor {
                     stop_reason = sr;
                     ctx.input_tokens  += usage.input_tokens;
                     ctx.output_tokens += usage.output_tokens;
-                    self.bus.emit(NekoEvent::ContextUpdate {
+                    self.bus.emit(RingEvent::ContextUpdate {
                         session_id:    self.session_id,
                         tokens:        ctx.total_tokens(),
                         message_count: ctx.messages.len(),
                     });
                 }
                 StreamEvent::Error(e) => {
-                    self.bus.emit(NekoEvent::AgentError {
+                    self.bus.emit(RingEvent::AgentError {
                         session_id: self.session_id, sub_agent_id: self.sub_agent_id, error: e.clone(),
                     });
                     return TurnResult::Error(e);
@@ -293,7 +293,7 @@ impl AgentExecutor {
             session::append_message(self.session_id, assistant_msg).await.ok();
         }
 
-        self.bus.emit(NekoEvent::AgentDone {
+        self.bus.emit(RingEvent::AgentDone {
             session_id:   self.session_id,
             sub_agent_id: self.sub_agent_id,
             stop_reason:  serde_json::to_value(&stop_reason)
@@ -366,7 +366,7 @@ impl AgentExecutor {
                     continue;
                 }
                 PermissionAction::Ask => {
-                    self.bus.emit(NekoEvent::ToolPermission {
+                    self.bus.emit(RingEvent::ToolPermission {
                         session_id:   self.session_id,
                         sub_agent_id: self.sub_agent_id,
                         call_id:      call_id.clone(),
@@ -430,7 +430,7 @@ impl AgentExecutor {
             let sig        = signal.clone();
             async move {
                 let start = chrono::Utc::now().timestamp_millis();
-                bus.emit(NekoEvent::ToolStart {
+                bus.emit(RingEvent::ToolStart {
                     session_id, sub_agent_id: sub_id,
                     call_id: rc.call_id.clone(), tool_name: rc.tool_name.clone(),
                     input: rc.input.clone(),
@@ -442,7 +442,7 @@ impl AgentExecutor {
                 let res = tool.execute(rc.input.clone(), &ctx).await;
                 let duration_ms = (chrono::Utc::now().timestamp_millis() - start) as u64;
                 let ok = res.is_ok();
-                bus.emit(NekoEvent::ToolEnd {
+                bus.emit(RingEvent::ToolEnd {
                     session_id, sub_agent_id: sub_id,
                     call_id: rc.call_id.clone(), tool_name: rc.tool_name.clone(),
                     ok, duration_ms,
@@ -463,7 +463,7 @@ impl AgentExecutor {
             if signal.is_cancelled() { return TurnResult::Cancelled; }
             let tool = self.tools.get(&rc.tool_name).unwrap();
             let start = chrono::Utc::now().timestamp_millis();
-            self.bus.emit(NekoEvent::ToolStart {
+            self.bus.emit(RingEvent::ToolStart {
                 session_id:   self.session_id,
                 sub_agent_id: self.sub_agent_id,
                 call_id:      rc.call_id.clone(),
@@ -479,7 +479,7 @@ impl AgentExecutor {
             let result = tool.execute(rc.input.clone(), &tool_ctx).await;
             let duration_ms = (chrono::Utc::now().timestamp_millis() - start) as u64;
             let ok = result.is_ok();
-            self.bus.emit(NekoEvent::ToolEnd {
+            self.bus.emit(RingEvent::ToolEnd {
                 session_id:   self.session_id,
                 sub_agent_id: self.sub_agent_id,
                 call_id:      rc.call_id.clone(),

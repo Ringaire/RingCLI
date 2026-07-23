@@ -13,7 +13,7 @@ use ring_core::permissions::{DefaultPermissionEngine, ModeName};
 use ring_core::session::{self, Session};
 use ring_core::skills::SkillRegistry;
 use ring_core::tools::ToolRegistry;
-use ring_core::NekoRuntime;
+use ring_core::RingRuntime;
 
 use ring_providers::provider::Provider;
 use ring_providers::ProviderRegistry;
@@ -44,7 +44,7 @@ pub struct BootstrappedRuntime {
     /// 会话级运行时：工具注册表 + MCP 动态管理 + 配置热重载。
     /// 持有以保活 MCP server 与运行时状态；亦供后续 /mcp 管理命令使用。
     #[allow(dead_code)]
-    pub ring_runtime:      Arc<NekoRuntime>,
+    pub ring_runtime:      Arc<RingRuntime>,
     /// 保活：配置文件监听器（drop 即停止热重载）。
     #[allow(dead_code)]
     pub config_watcher:    Option<notify::RecommendedWatcher>,
@@ -176,7 +176,7 @@ pub async fn bootstrap(args: &Args, session_id: Option<uuid::Uuid>) -> Result<Bo
     let skills: Arc<RwLock<SkillRegistry>> = Arc::new(RwLock::new(skill_registry));
 
     // ── 6. 运行时（工具注册表 + 事件总线 + MCP 管理，共享 skills）──
-    let mut ring_rt = NekoRuntime::new_with_tools(ring_tools::init_hybrid_registry());
+    let mut ring_rt = RingRuntime::new_with_tools(ring_tools::init_hybrid_registry());
     ring_rt.skills = skills.clone();
     let ring_runtime = Arc::new(ring_rt);
     ring_runtime.set_mcp_manager(Arc::new(CliMcpManager::new(skills.clone())));

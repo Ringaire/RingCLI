@@ -1,4 +1,4 @@
-// NekoRuntime：会话级运行时管理器。
+// RingRuntime：会话级运行时管理器。
 //
 // 负责工具注册表、事件总线、技能注册表，以及 MCP 服务器的动态加载/卸载与
 // 配置热重载。
@@ -40,7 +40,7 @@ struct McpServerState {
     tool_names: Vec<String>,
 }
 
-pub struct NekoRuntime {
+pub struct RingRuntime {
     pub bus:    EventBus,
     pub tools:  Arc<HybridToolRegistry>,
     pub skills: Arc<RwLock<SkillRegistry>>,
@@ -48,7 +48,7 @@ pub struct NekoRuntime {
     mcp_servers: RwLock<HashMap<String, McpServerState>>,
 }
 
-impl NekoRuntime {
+impl RingRuntime {
     pub fn new() -> Self {
         Self {
             bus:         EventBus::new(),
@@ -159,7 +159,7 @@ impl NekoRuntime {
     }
 }
 
-impl Default for NekoRuntime {
+impl Default for RingRuntime {
     fn default() -> Self {
         Self::new()
     }
@@ -185,27 +185,27 @@ mod tests {
 
     #[test]
     fn test_ring_runtime_new() {
-        let runtime = NekoRuntime::new();
+        let runtime = RingRuntime::new();
         assert!(runtime.tools.get("bash").is_none()); // 空注册表
     }
 
     #[test]
     fn test_ring_runtime_new_with_tools() {
         let registry = HybridToolRegistry::new();
-        let runtime = NekoRuntime::new_with_tools(registry);
+        let runtime = RingRuntime::new_with_tools(registry);
         assert!(runtime.tools_dyn().get("bash").is_none());
     }
 
     #[test]
     fn test_ring_runtime_tools_dyn() {
-        let runtime = NekoRuntime::new();
+        let runtime = RingRuntime::new();
         let trait_obj = runtime.tools_dyn();
         assert!(trait_obj.get("bash").is_none());
     }
 
     #[test]
     fn test_ring_runtime_default() {
-        let runtime = NekoRuntime::default();
+        let runtime = RingRuntime::default();
         assert!(runtime.mcp_manager.read().is_none());
     }
 

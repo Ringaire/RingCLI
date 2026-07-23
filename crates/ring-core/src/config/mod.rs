@@ -100,7 +100,7 @@ impl Default for UiConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NekoUserConfig {
+pub struct RingUserConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model:       Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -201,7 +201,7 @@ pub fn parse_jsonc<T: for<'de> Deserialize<'de>>(src: &str) -> Result<T, serde_j
 
 // ── 深度合并 ──────────────────────────────────────────────────────────────────
 
-fn merge_config(base: &mut NekoUserConfig, over: NekoUserConfig) {
+fn merge_config(base: &mut RingUserConfig, over: RingUserConfig) {
     if let Some(m) = over.model.filter(|m| !m.trim().is_empty()) { base.model = Some(m); }
     if let Some(p) = over.proxy       { base.proxy        = Some(p); }
     if let Some(ps) = over.providers  {
@@ -348,12 +348,12 @@ fn parse_mcp_json(raw: &str) -> HashMap<String, McpServerConfig> {
 // ── 加载配置 ──────────────────────────────────────────────────────────────────
 
 pub async fn load_config(cwd: Option<&std::path::Path>) -> ResolvedConfig {
-    let mut merged = NekoUserConfig::default();
+    let mut merged = RingUserConfig::default();
 
     // 1. 全局配置 (~/.config/ring/settings.jsonc)
     let global_path = paths::config_path();
     if let Ok(raw) = tokio::fs::read_to_string(&global_path).await {
-        if let Ok(cfg) = parse_jsonc::<NekoUserConfig>(&raw) {
+        if let Ok(cfg) = parse_jsonc::<RingUserConfig>(&raw) {
             merge_config(&mut merged, cfg);
         }
     }
@@ -438,21 +438,21 @@ pub async fn load_config(cwd: Option<&std::path::Path>) -> ResolvedConfig {
     if let Some(dir) = cwd {
         let project_path = dir.join(".ring").join("settings.jsonc");
         if let Ok(raw) = tokio::fs::read_to_string(&project_path).await {
-            if let Ok(cfg) = parse_jsonc::<NekoUserConfig>(&raw) {
+            if let Ok(cfg) = parse_jsonc::<RingUserConfig>(&raw) {
                 merge_config(&mut merged, cfg);
             }
         }
         // 3b. 项目配置 (.ring/settings.jsonc) — 新标准路径
         let ring_project_path = dir.join(".ring").join("settings.jsonc");
         if let Ok(raw) = tokio::fs::read_to_string(&ring_project_path).await {
-            if let Ok(cfg) = parse_jsonc::<NekoUserConfig>(&raw) {
+            if let Ok(cfg) = parse_jsonc::<RingUserConfig>(&raw) {
                 merge_config(&mut merged, cfg);
             }
         }
         // 4. 本地覆盖（不提交）
         let local_path = dir.join(".ring").join("settings.local.jsonc");
         if let Ok(raw) = tokio::fs::read_to_string(&local_path).await {
-            if let Ok(cfg) = parse_jsonc::<NekoUserConfig>(&raw) {
+            if let Ok(cfg) = parse_jsonc::<RingUserConfig>(&raw) {
                 merge_config(&mut merged, cfg);
             }
         }
@@ -484,11 +484,11 @@ pub async fn load_config(cwd: Option<&std::path::Path>) -> ResolvedConfig {
 ///
 /// 用于 `/connect` 向导等需要修改并回写配置的场景——回写 `ResolvedConfig` 会把环境变量里的
 /// API key 持久化进文件，因此修改前必须从这里拿到磁盘上的原始形态。文件缺失/解析失败时返回默认值。
-pub async fn load_user_config() -> NekoUserConfig {
+pub async fn load_user_config() -> RingUserConfig {
     let path = paths::config_path();
     match tokio::fs::read_to_string(&path).await {
-        Ok(raw) => parse_jsonc::<NekoUserConfig>(&raw).unwrap_or_default(),
-        Err(_)  => NekoUserConfig::default(),
+        Ok(raw) => parse_jsonc::<RingUserConfig>(&raw).unwrap_or_default(),
+        Err(_)  => RingUserConfig::default(),
     }
 }
 
@@ -496,7 +496,7 @@ pub async fn load_user_config() -> NekoUserConfig {
 ///
 /// 先写同目录临时文件再 rename，保证原子性。父目录不存在则创建。
 /// **注意**：JSONC 注释会在回写时丢失（与 bun `saveConfig` 行为一致）。
-pub async fn save_config(cfg: &NekoUserConfig) -> std::io::Result<()> {
+pub async fn save_config(cfg: &RingUserConfig) -> std::io::Result<()> {
     let path = paths::config_path();
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;

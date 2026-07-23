@@ -7,8 +7,8 @@ use std::time::Duration;
 use notify::{Event, RecursiveMode, Watcher};
 use tracing::{debug, info, warn};
 
-use ring_core::events::{EventBus, NekoEvent};
-use ring_core::NekoRuntime;
+use ring_core::events::{EventBus, RingEvent};
+use ring_core::RingRuntime;
 use uuid::Uuid;
 
 const DEBOUNCE_MS: u64 = 300;
@@ -17,7 +17,7 @@ const DEBOUNCE_MS: u64 = 300;
 ///
 /// cwd 用于解析项目级配置；session_id 用于事件标注。
 pub fn spawn_config_watch(
-    runtime:    Arc<NekoRuntime>,
+    runtime:    Arc<RingRuntime>,
     bus:        EventBus,
     cwd:        PathBuf,
     session_id: Uuid,
@@ -80,7 +80,7 @@ pub fn spawn_config_watch(
             let cfg = ring_core::load_config(Some(&reload_cwd)).await;
             runtime.apply_mcp_config(&cfg.mcp_servers).await;
             info!(mcp = runtime.mcp_server_names().len(), "config hot-reloaded");
-            bus.emit(NekoEvent::SessionMessage {
+            bus.emit(RingEvent::SessionMessage {
                 session_id,
                 role:    "system".to_string(),
                 content: format!(
