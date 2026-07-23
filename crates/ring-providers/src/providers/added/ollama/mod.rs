@@ -50,11 +50,31 @@ fn convert_messages(msgs: &[Message]) -> Value {
     for msg in msgs {
         match msg.role {
             MessageRole::User => {
+                // 收集图片（Ollama OpenAI 兼容端点支持 image_url）
+                let images: Vec<(String, String)> = msg.content.iter()
+                    .filter_map(|b| if let ContentBlock::Image { media_type, data } = b {
+                        Some((media_type.clone(), data.clone()))
+                    } else { None })
+                    .collect();
                 let text: String = msg.content.iter()
                     .filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None })
                     .collect::<Vec<_>>()
                     .join("\n");
-                out.push(json!({"role": "user", "content": text}));
+                if images.is_empty() {
+                    out.push(json!({"role": "user", "content": text}));
+                } else {
+                    let mut parts: Vec<Value> = Vec::new();
+                    if !text.is_empty() {
+                        parts.push(json!({"type": "text", "text": text}));
+                    }
+                    for (media_type, data) in images {
+                        parts.push(json!({
+                            "type": "image_url",
+                            "image_url": { "url": format!("data:{};base64,{}", media_type, data) }
+                        }));
+                    }
+                    out.push(json!({"role": "user", "content": parts}));
+                }
             }
             MessageRole::Assistant => {
                 let mut text_parts: Vec<&str> = Vec::new();

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 /// Base directory for all ring data: ~/.ring/
-fn ring_home() -> PathBuf {
+pub fn ring_home() -> PathBuf {
     std::env::var("RING_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".ring"))

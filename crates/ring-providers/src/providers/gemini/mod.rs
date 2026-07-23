@@ -40,6 +40,10 @@ fn convert_messages_to_contents(msgs: &[Message]) -> Value {
             .iter()
             .filter_map(|blk| match blk {
                 ContentBlock::Text { text } => Some(json!({ "text": text })),
+                // Gemini 图片：inline_data（base64）
+                ContentBlock::Image { media_type, data } => Some(json!({
+                    "inline_data": { "mime_type": media_type, "data": data }
+                })),
                 _ => None,
             })
             .collect();
