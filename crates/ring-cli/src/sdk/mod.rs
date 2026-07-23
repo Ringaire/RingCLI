@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use ring_core::events::NekoEvent;
+use ring_core::events::RingEvent;
 
 use crate::args::Args;
 use crate::bootstrap;
@@ -162,15 +162,15 @@ async fn handle_message(
 
     // 消费事件 → NDJSON 输出
     while let Ok(ev) = sub.recv().await {
-        let is_done = matches!(ev, NekoEvent::AgentDone { .. } | NekoEvent::AgentError { .. });
+        let is_done = matches!(ev, RingEvent::AgentDone { .. } | RingEvent::AgentError { .. });
         let (msg_type, payload) = match &ev {
-            NekoEvent::AgentText { delta, .. } => ("text", delta.clone()),
-            NekoEvent::AgentTextDone { full, .. } => ("done", full.clone()),
-            NekoEvent::AgentToolCall { tool_name, input: tool_input, .. } => {
+            RingEvent::AgentText { delta, .. } => ("text", delta.clone()),
+            RingEvent::AgentTextDone { full, .. } => ("done", full.clone()),
+            RingEvent::AgentToolCall { tool_name, input: tool_input, .. } => {
                 ("tool", format!("{tool_name}({tool_input})"))
             }
-            NekoEvent::AgentError { error, .. } => ("error", error.clone()),
-            NekoEvent::AgentReasoning { delta, .. } => ("reasoning", delta.clone()),
+            RingEvent::AgentError { error, .. } => ("error", error.clone()),
+            RingEvent::AgentReasoning { delta, .. } => ("reasoning", delta.clone()),
             _ => {
                 if is_done { break; }
                 continue;

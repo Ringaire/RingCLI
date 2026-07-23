@@ -1,7 +1,7 @@
-// 把 NekoEvent 流式打印到 stdout（plain 模式）
+// 把 RingEvent 流式打印到 stdout（plain 模式）
 
 use std::io::Write;
-use ring_core::events::NekoEvent;
+use ring_core::events::RingEvent;
 
 pub struct PlainPrinter {
     /// 当前是否处于 assistant 文本输出中（控制换行）
@@ -21,23 +21,23 @@ impl PlainPrinter {
         }
     }
 
-    pub fn handle(&mut self, ev: &NekoEvent) {
+    pub fn handle(&mut self, ev: &RingEvent) {
         // 子 agent 事件多缩进一级
         let ind: &str = if ev.is_sub_agent() { "    " } else { "" };
         match ev {
-            NekoEvent::AgentThinking { .. } => {
+            RingEvent::AgentThinking { .. } => {
                 if !self.thinking_shown {
                     print!("ai> ");
                     let _ = std::io::stdout().flush();
                     self.thinking_shown = true;
                 }
             }
-            NekoEvent::AgentReasoning { delta, .. } => {
+            RingEvent::AgentReasoning { delta, .. } => {
                 // thinking 内容用暗色显示（ANSI dim）
                 print!("\x1B[2m{}\x1B[0m", delta);
                 let _ = std::io::stdout().flush();
             }
-            NekoEvent::AgentText { delta, .. } => {
+            RingEvent::AgentText { delta, .. } => {
                 if !self.in_text {
                     self.in_text = true;
                 }
@@ -45,7 +45,7 @@ impl PlainPrinter {
                 print!("{}", delta);
                 let _ = std::io::stdout().flush();
             }
-            NekoEvent::AgentToolCall { tool_name, .. } => {
+            RingEvent::AgentToolCall { tool_name, .. } => {
                 // 工具调用开始前换行
                 if self.in_text {
                     println!();
@@ -53,18 +53,18 @@ impl PlainPrinter {
                 }
                 println!("{}  \x1B[36m→ {}\x1B[0m", ind, tool_name);
             }
-            NekoEvent::ToolStart { tool_name, input, .. } => {
+            RingEvent::ToolStart { tool_name, input, .. } => {
                 let preview = summarize_input(input);
                 println!("{}  \x1B[90m[{}] {}\x1B[0m", ind, tool_name, preview);
             }
-            NekoEvent::ToolEnd { tool_name, ok, duration_ms, .. } => {
+            RingEvent::ToolEnd { tool_name, ok, duration_ms, .. } => {
                 let status = if *ok { "\x1B[32mok\x1B[0m" } else { "\x1B[31merror\x1B[0m" };
                 println!("{}  \x1B[90m[{}] {} ({}ms)\x1B[0m", ind, tool_name, status, duration_ms);
             }
-            NekoEvent::ToolPermission { tool_name, .. } => {
+            RingEvent::ToolPermission { tool_name, .. } => {
                 println!("{}  \x1B[33m[permission requested: {}]\x1B[0m", ind, tool_name);
             }
-            NekoEvent::BashOutput { stream, data, .. } => {
+            RingEvent::BashOutput { stream, data, .. } => {
                 use ring_core::events::BashStream;
                 match stream {
                     BashStream::Stdout => print!("{}", data),
@@ -72,33 +72,33 @@ impl PlainPrinter {
                 }
                 let _ = std::io::stdout().flush();
             }
-            NekoEvent::AgentError { error, .. } => {
+            RingEvent::AgentError { error, .. } => {
                 if self.in_text { println!(); self.in_text = false; }
                 println!("  \x1B[31m[error: {}]\x1B[0m", error);
             }
-            NekoEvent::AgentDone { .. } => {
+            RingEvent::AgentDone { .. } => {
                 if self.in_text {
                     println!();
                     self.in_text = false;
                 }
                 self.thinking_shown = false;
             }
-            NekoEvent::AgentSpawned { role, model, task, .. } => {
+            RingEvent::AgentSpawned { role, model, task, .. } => {
                 if self.in_text { println!(); self.in_text = false; }
                 let role_s = role.as_deref().unwrap_or("balanced");
                 let task_preview = truncate(task, 60);
                 println!("  \x1B[35m⟳ spawned sub-agent [{}/{}]: {}\x1B[0m", role_s, model, task_preview);
             }
-            NekoEvent::ContextUpdate { .. }
-            | NekoEvent::ContextTruncate { .. }
-            | NekoEvent::ContextSummary { .. }
-            | NekoEvent::AgentReasoningDone { .. }
-            | NekoEvent::AgentTextDone { .. }
-            | NekoEvent::SessionStart { .. }
-            | NekoEvent::SessionMessage { .. }
-            | NekoEvent::SessionEnd { .. }
-            | NekoEvent::ProcessReady { .. }
-            | NekoEvent::ProcessExit { .. } => {}
+            RingEvent::ContextUpdate { .. }
+            | RingEvent::ContextTruncate { .. }
+            | RingEvent::ContextSummary { .. }
+            | RingEvent::AgentReasoningDone { .. }
+            | RingEvent::AgentTextDone { .. }
+            | RingEvent::SessionStart { .. }
+            | RingEvent::SessionMessage { .. }
+            | RingEvent::SessionEnd { .. }
+            | RingEvent::ProcessReady { .. }
+            | RingEvent::ProcessExit { .. } => {}
         }
     }
 

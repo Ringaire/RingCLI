@@ -14,7 +14,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::{mpsc, Mutex as TokioMutex};
 use tokio_util::sync::CancellationToken;
 
-use ring_core::events::NekoEvent;
+use ring_core::events::RingEvent;
 use ring_core::session;
 use ring_core::tools::Message;
 use ring_providers::provider::{DEFAULT_CONTEXT_WINDOW, DEFAULT_THINKING_BUDGET};
@@ -216,49 +216,49 @@ impl AppState {
     }
 
     /// 把总线事件映射到界面状态。主/次 agent 由 sub_agent_id 区分。
-    fn apply_event(&mut self, ev: &NekoEvent) {
+    fn apply_event(&mut self, ev: &RingEvent) {
         let sub = ev.sub_agent_id();
         match ev {
-            NekoEvent::AgentThinking { .. } => {
+            RingEvent::AgentThinking { .. } => {
                 self.is_thinking = true;
             }
-            NekoEvent::AgentReasoning { delta, .. } => {
+            RingEvent::AgentReasoning { delta, .. } => {
                 self.chat.append_reasoning(sub, delta);
             }
-            NekoEvent::AgentText { delta, .. } => {
+            RingEvent::AgentText { delta, .. } => {
                 self.is_thinking = false;
                 self.chat.append_assistant(sub, delta);
             }
-            NekoEvent::AgentSpawned { sub_agent_id, role, model, task, .. } => {
+            RingEvent::AgentSpawned { sub_agent_id, role, model, task, .. } => {
                 let role_s = role.as_deref().unwrap_or("balanced");
                 self.chat.add_spawn(*sub_agent_id, role_s, model, task);
             }
-            NekoEvent::AgentToolCall { call_id, tool_name, input, .. } => {
+            RingEvent::AgentToolCall { call_id, tool_name, input, .. } => {
                 let preview = preview_value(tool_name, input);
                 self.chat.add_tool(sub, call_id, tool_name, &preview);
             }
-            NekoEvent::ToolStart { call_id, tool_name, input, .. } => {
+            RingEvent::ToolStart { call_id, tool_name, input, .. } => {
                 let preview = preview_value(tool_name, input);
                 self.chat.add_tool(sub, call_id, tool_name, &preview);
             }
-            NekoEvent::ToolEnd { call_id, ok, duration_ms, .. } => {
+            RingEvent::ToolEnd { call_id, ok, duration_ms, .. } => {
                 self.chat.complete_tool(call_id, *ok, *duration_ms);
             }
-            NekoEvent::BashOutput { call_id, stream, data, .. } => {
+            RingEvent::BashOutput { call_id, stream, data, .. } => {
                 let is_stderr = matches!(stream, ring_core::events::BashStream::Stderr);
                 self.chat.append_bash_output(call_id, is_stderr, data);
             }
-            NekoEvent::AgentError { error, .. } => {
+            RingEvent::AgentError { error, .. } => {
                 self.is_thinking = false;
                 self.chat.add_error(sub, error.clone());
             }
-            NekoEvent::AgentDone { .. } => {
+            RingEvent::AgentDone { .. } => {
                 // 仅主 agent done 才解除 thinking / 固化轮次
                 if sub.is_none() {
                     self.is_thinking = false;
                 }
             }
-            NekoEvent::ContextUpdate { tokens, .. } => {
+            RingEvent::ContextUpdate { tokens, .. } => {
                 self.tokens = *tokens;
             }
             _ => {}

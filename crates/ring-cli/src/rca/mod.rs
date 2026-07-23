@@ -511,7 +511,7 @@ async fn execute_task(
 
     let mut text = String::new();
     while let Ok(ev) = sub.try_recv() {
-        if let ring_core::events::NekoEvent::AgentTextDone { full, .. } = ev {
+        if let ring_core::events::RingEvent::AgentTextDone { full, .. } = ev {
             text = full;
         }
     }

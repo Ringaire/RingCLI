@@ -12,12 +12,12 @@ pub use agent::{
     build_model_catalog, classify_model, select_model_by_role, ModelCatalogEntry, ModelRole,
 };
 pub use config::{
-    load_config, load_user_config, save_config, McpServerConfig, NekoUserConfig, ProviderEntry,
+    load_config, load_user_config, save_config, McpServerConfig, RingUserConfig, ProviderEntry,
     ResolvedConfig,
 };
-pub use events::{EventBus, NekoEvent};
+pub use events::{EventBus, RingEvent};
 pub use permissions::{DefaultPermissionEngine, ModeName, PermissionAction};
-pub use runtime::{McpManager, NekoRuntime};
+pub use runtime::{McpManager, RingRuntime};
 pub use session::{
     append_message, create_session, delete_session, fork_session, init_dirs, list_sessions,
     load_session, rename_session, replace_messages, search_sessions, Session, SessionMeta,

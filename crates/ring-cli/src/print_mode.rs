@@ -12,7 +12,7 @@ use tokio::sync::Mutex as TokioMutex;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use ring_core::events::{EventBus, NekoEvent};
+use ring_core::events::{EventBus, RingEvent};
 use ring_engine::{AgentContext, AgentExecutor};
 
 use crate::args::Args;
@@ -87,14 +87,14 @@ async fn run_text(
     // 从事件总线收集最终文本
     let mut text = String::new();
     while let Ok(ev) = sub.try_recv() {
-        if let NekoEvent::AgentTextDone { full, .. } = ev {
+        if let RingEvent::AgentTextDone { full, .. } = ev {
             text = full;
         }
     }
 
     if text.is_empty() {
         while let Ok(ev) = sub.try_recv() {
-            if let NekoEvent::AgentText { delta, .. } = ev {
+            if let RingEvent::AgentText { delta, .. } = ev {
                 text.push_str(&delta);
             }
         }
@@ -143,12 +143,12 @@ async fn run_json(
 
     while let Ok(ev) = sub.try_recv() {
         match ev {
-            NekoEvent::AgentTextDone { full, .. } => text = full,
-            NekoEvent::AgentToolCall { tool_name, input, .. } => {
+            RingEvent::AgentTextDone { full, .. } => text = full,
+            RingEvent::AgentToolCall { tool_name, input, .. } => {
                 tool_calls.push(JsonToolCall { name: tool_name, input });
             }
-            NekoEvent::AgentDone { .. } => { /* final */ }
-            NekoEvent::AgentError { error, .. } => {
+            RingEvent::AgentDone { .. } => { /* final */ }
+            RingEvent::AgentError { error, .. } => {
                 stop_reason = "error".to_string();
                 text = error;
             }
@@ -158,7 +158,7 @@ async fn run_json(
 
     if text.is_empty() {
         while let Ok(ev) = sub.try_recv() {
-            if let NekoEvent::AgentText { delta, .. } = ev {
+            if let RingEvent::AgentText { delta, .. } = ev {
                 text.push_str(&delta);
             }
         }
@@ -194,7 +194,7 @@ async fn run_stream_json(
 
     // 实时输出事件
     while let Ok(ev) = sub.recv().await {
-        let is_done = matches!(ev, NekoEvent::AgentDone { .. } | NekoEvent::AgentError { .. });
+        let is_done = matches!(ev, RingEvent::AgentDone { .. } | RingEvent::AgentError { .. });
         println!("{}", serde_json::to_string(&ev)?);
         if is_done {
             break;

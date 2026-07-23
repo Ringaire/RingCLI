@@ -21,7 +21,7 @@ use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt as _};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
-use ring_core::events::NekoEvent;
+use ring_core::events::RingEvent;
 use ring_engine::AgentContext;
 
 use crate::args::Args;
@@ -214,23 +214,23 @@ async fn chat(
     let collector = tokio::spawn(async move {
         while let Ok(ev) = sub.recv().await {
             match ev {
-                NekoEvent::AgentTextDone { full, .. } => {
+                RingEvent::AgentTextDone { full, .. } => {
                     *text_c.lock().expect("text mutex poisoned during AgentTextDone") = full;
                 }
-                NekoEvent::AgentText { delta, .. } => {
+                RingEvent::AgentText { delta, .. } => {
                     text_c.lock().expect("text mutex poisoned during AgentText").push_str(&delta);
                 }
-                NekoEvent::AgentReasoningDone { full, .. } => {
+                RingEvent::AgentReasoningDone { full, .. } => {
                     *reasoning_c.lock().expect("reasoning mutex poisoned during AgentReasoningDone") = full;
                 }
-                NekoEvent::AgentReasoning { delta, .. } => {
+                RingEvent::AgentReasoning { delta, .. } => {
                     reasoning_c.lock().expect("reasoning mutex poisoned during AgentReasoning").push_str(&delta);
                 }
-                NekoEvent::AgentDone { stop_reason, .. } => {
+                RingEvent::AgentDone { stop_reason, .. } => {
                     *stop_c.lock().expect("stop_reason mutex poisoned during AgentDone") = stop_reason;
                     break;
                 }
-                NekoEvent::AgentError { error, .. } => {
+                RingEvent::AgentError { error, .. } => {
                     *stop_c.lock().expect("stop_reason mutex poisoned during AgentError") = "error".to_string();
                     *text_c.lock().expect("text mutex poisoned during AgentError") = error;
                     break;
@@ -313,31 +313,31 @@ async fn chat_stream(
                 continue;
             }
             let line = match &ev {
-                NekoEvent::AgentReasoning { delta, .. } => {
+                RingEvent::AgentReasoning { delta, .. } => {
                     Some(format!("{}\n", serde_json::json!({ "type": "reasoning", "delta": delta })))
                 }
-                NekoEvent::AgentReasoningDone { full, .. } => {
+                RingEvent::AgentReasoningDone { full, .. } => {
                     Some(format!("{}\n", serde_json::json!({ "type": "reasoning_done", "full": full })))
                 }
-                NekoEvent::AgentText { delta, .. } => {
+                RingEvent::AgentText { delta, .. } => {
                     Some(format!("{}\n", serde_json::json!({ "type": "text", "delta": delta })))
                 }
-                NekoEvent::AgentTextDone { full, .. } => {
+                RingEvent::AgentTextDone { full, .. } => {
                     Some(format!("{}\n", serde_json::json!({ "type": "text_done", "full": full })))
                 }
-                NekoEvent::AgentToolCall { call_id, tool_name, input, .. } |
-                NekoEvent::ToolStart { call_id, tool_name, input, .. } => {
+                RingEvent::AgentToolCall { call_id, tool_name, input, .. } |
+                RingEvent::ToolStart { call_id, tool_name, input, .. } => {
                     Some(format!("{}\n", serde_json::json!({ "type": "tool_start", "call_id": call_id, "tool": tool_name, "input": input })))
                 }
-                NekoEvent::ToolEnd { call_id, tool_name, ok, duration_ms, .. } => {
+                RingEvent::ToolEnd { call_id, tool_name, ok, duration_ms, .. } => {
                     Some(format!("{}\n", serde_json::json!({ "type": "tool_end", "call_id": call_id, "tool": tool_name, "ok": ok, "duration_ms": duration_ms })))
                 }
-                NekoEvent::AgentDone { stop_reason, .. } => {
+                RingEvent::AgentDone { stop_reason, .. } => {
                     let l = format!("{}\n", serde_json::json!({ "type": "done", "stop_reason": stop_reason }));
                     let _ = tx_f.send(l);
                     break;
                 }
-                NekoEvent::AgentError { error, .. } => {
+                RingEvent::AgentError { error, .. } => {
                     let l = format!("{}\n", serde_json::json!({ "type": "error", "error": error }));
                     let _ = tx_f.send(l);
                     break;
