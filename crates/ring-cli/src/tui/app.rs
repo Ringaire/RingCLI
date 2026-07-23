@@ -1939,7 +1939,21 @@ async fn start_turn(
     let session_id = runtime.session.meta.id;
     {
         let mut content = vec![ring_core::tools::ContentBlock::Text { text: model_text }];
-        content.extend(mentions.images);
+        content.extend(mentions.images.clone());
+        // 图片能力检测：主模型不支持 image 时提示
+        if !mentions.images.is_empty() {
+            let m_supports = ring_providers::models_dev::resolve_meta(&runtime.model)
+                .map(|m| m.supports_vision)
+                .unwrap_or(false);
+            let has_tool = ring_providers::provider::vision_provider().is_some();
+            if !m_supports {
+                if has_tool {
+                    state.chat.add_system("ℹ 当前模型不支持图像，已附图。可调用 image_analyze 工具转发给视觉模型识别。");
+                } else {
+                    state.chat.add_system("⚠ 当前模型可能不支持图像，且未配置 vision_model。建议在 settings.jsonc 配置 vision_model（如 zhipu/glm-4v-flash）。");
+                }
+            }
+        }
         let msg = ring_core::tools::Message::new(ring_core::tools::MessageRole::User, content);
         let mut guard = ctx.lock().await;
         guard.add_message(msg.clone());

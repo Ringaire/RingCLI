@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use parking_lot::RwLock;
 use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use ring_core::agent::ModelCatalogEntry;
 use ring_core::config::ResolvedConfig;
@@ -108,6 +108,21 @@ pub async fn bootstrap(args: &Args, session_id: Option<uuid::Uuid>) -> Result<Bo
     // ── 2. 构建 provider 注册表 ──
     let bootstrap_p = ring_providers::build_registry(&config);
     let provider_registry = Arc::new(bootstrap_p.registry);
+
+    // ── 2b. 视觉辅助 provider（vision_model 配置）──
+    // 配置了 vision_model（provider/model 格式）时，取对应 provider 注入全局，
+    // 供 image_analyze 工具调用。主模型不支持 image 时按需转发。
+    if let Some(vision_ref) = &config.vision_model {
+        let (vp_id, _) = ring_providers::split_model_ref(vision_ref);
+        if let Some(pid) = vp_id {
+            if let Some(p) = provider_registry.get(&pid) {
+                ring_providers::provider::init_vision_provider(p);
+                debug!(vision = %vision_ref, "vision provider initialized");
+            } else {
+                warn!(vision = %vision_ref, "vision_model provider not registered (no API key?)");
+            }
+        }
+    }
 
     // ── 3. 解析 provider + model ──
     let (provider, model) = resolve_provider_and_model(

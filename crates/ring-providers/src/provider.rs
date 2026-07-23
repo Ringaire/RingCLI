@@ -3,6 +3,7 @@ use futures_util::Stream;
 use ring_core::tools::Message;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
@@ -190,4 +191,20 @@ pub trait Provider: Send + Sync {
     async fn stream(&self, req: &ChatRequest, signal: CancellationToken) -> Result<ProviderStream, ProviderError>;
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError>;
     fn default_model(&self) -> &str;
+}
+
+// ── 全局视觉辅助 provider（供 image_analyze 工具调用）──────────────────────────────
+
+use std::sync::OnceLock;
+
+static VISION_PROVIDER: OnceLock<Arc<dyn Provider>> = OnceLock::new();
+
+/// 设置全局视觉辅助 provider（bootstrap 时调用，若配置了 vision_model）。
+pub fn init_vision_provider(p: Arc<dyn Provider>) {
+    let _ = VISION_PROVIDER.set(p);
+}
+
+/// 取全局视觉辅助 provider（image_analyze 工具调用）。None = 未配置。
+pub fn vision_provider() -> Option<Arc<dyn Provider>> {
+    VISION_PROVIDER.get().cloned()
 }
